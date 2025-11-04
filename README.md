@@ -2,7 +2,7 @@
 
 DeepReader is an agentic reading toolkit that couples DeepSeek-OCR with opinionated defaults for running single-document or batch OCR. It streamlines image/PDF ingestion, produces Markdown accompanied by figure crops and layout previews, and exposes knobs for both CLI and Gradio workflows.
 
-***
+
 ## Project Layout
 
 - `images/`: Sample page images for quick smoke-tests.
@@ -10,7 +10,6 @@ DeepReader is an agentic reading toolkit that couples DeepSeek-OCR with opiniona
 - `outputs/`: Generated Markdown, annotated images, and layout PDFs.
 - `DeepSeek-OCR-master/DeepSeek-OCR-vllm/`: vLLM-powered runtime (default entry points).
 
-***
 ## Environment Setup
 
 ```bash
@@ -27,7 +26,6 @@ Optional extras:
 - `pip install flash-attn==2.7.3 --no-build-isolation` (faster attention if supported).
 - `export TMPDIR=$PWD/outputs/tmp` when `/tmp` isn’t writable.
 
-***
 ## Configuration Strategy
 
 `DeepSeek-OCR-vllm/config.py` reads all defaults from environment variables, making it easy to swap inputs, outputs, prompts, or GPU settings without editing code.
@@ -45,7 +43,6 @@ export DEEPREADER_GPU_MEM_UTIL=0.8
 
 >**GPU tip**: the default vLLM config assumes ≈10 GB of free VRAM. Tune `DEEPREADER_GPU_MEM_UTIL` down if you’re memory-constrained.
 
-***
 
 ## Image OCR Pipeline (CLI)
 
@@ -68,7 +65,6 @@ Outputs:
 - `images/*.jpg`: Extracted figure crops.
 - `geo.jpg` (conditional): Geometry reconstruction if the model returns structured line data.
 
-***
 ## PDF OCR Pipeline (CLI)
 
 ```bash
@@ -92,7 +88,6 @@ You'll get:
 
 Disable repeat filtering with `--skip-repeat false` if you need every page’s raw output.
 
-****
 ## Gradio Interface
 
 Launch an interactive UI that accepts image or PDF uploads and returns a zipped bundle (Markdown, annotated layouts, figure crops):
@@ -113,7 +108,7 @@ Controls let you override the prompt, crop mode, CUDA device list, GPU memory ut
 
 >**Note**: plan for ≈10 GB of free VRAM for the default gundam (hi-res) mode. Lower the slider/flag if your GPU has less headroom.
 
-***
+
 ### Vision Modes
 
 
@@ -124,7 +119,7 @@ Controls let you override the prompt, crop mode, CUDA device list, GPU memory ut
 
 Switch via `--mode` (CLI), the Gradio dropdown, or `DEEPREADER_MODE`.
 
-***
+
 ### Prompt Templates
 
 Named templates keep prompts consistent across runs:
@@ -138,14 +133,14 @@ Named templates keep prompts consistent across runs:
 
 Select them via the template dropdown/CLI flag/env var, or exceed with a custom `--prompt`.
 
-***
+
 ## Changelog
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
 | 0.1.0   | 2025-11-04 | Initial public drop: shared vLLM engine cache, mode/prompt presets, GPU memory control, refreshed Gradio UI, session auto-cleanup |
 
-***
+
 ## Troubleshooting
 
 - **GPU capability errors**: ensure `CUDA_DEVICE_ORDER=PCI_BUS_ID` (automatically set) and specify a single `--cuda-visible-devices` index.
@@ -153,6 +148,6 @@ Select them via the template dropdown/CLI flag/env var, or exceed with a custom 
 - **Missing `/tmp` write access**: `export TMPDIR=$PWD/outputs/tmp`.
 - **NVML InvalidArgument**: usually indicates pointing to a non-existent GPU index; double-check the selected CUDA device.
 
-***
+
 ## License & Contributions
 This repo mirrors [DeepSeek-OCR](https://github.com/deepseek-ai/DeepSeek-OCR) OSS code plus integration glue. Follow upstream licensing for model usage. Contributions welcome—please use Conventional Commit messages (`feat: ...`, `fix: ...`) and include CLI examples/VRAM notes in PR descriptions.
