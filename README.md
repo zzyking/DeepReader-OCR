@@ -12,6 +12,8 @@ DeepReader is an agentic reading toolkit that couples DeepSeek-OCR with opiniona
 
 ## Environment Setup
 
+- download the vllm-0.8.5 [whl](https://github.com/vllm-project/vllm/releases/tag/v0.8.5) 
+
 ```bash
 conda create -n deepreader python=3.12.9 -y
 conda activate deepreader
@@ -42,6 +44,53 @@ export DEEPREADER_GPU_MEM_UTIL=0.8
 ```
 
 >**GPU tip**: the default vLLM config assumes ≈10 GB of free VRAM. Tune `DEEPREADER_GPU_MEM_UTIL` down if you’re memory-constrained.
+
+## Gradio Interface
+
+[![DeepReader Gradio UI](assets/interface.png)](assets/interface.png)
+
+Launch an interactive UI that accepts image or PDF uploads and returns a zipped bundle (Markdown, annotated layouts, figure crops):
+
+```bash
+python run_deepreader_gradio.py --host 0.0.0.0 --port 10086 --no-browser
+```
+
+Features:
+
+- Upload image/PDF from the left column, pick a vision mode (`base` or `gundam (hi-res)`), and select a prompt template.
+- Adjust GPU memory utilisation (default 0.8 ≈ 80% usage) and device ID.
+- Toggle “Keep models loaded” to reuse the engine between runs; click “Unload Models” to free VRAM.
+- Gradio keeps only the latest 20 sessions and drops anything older than 24 hours, so `outputs/gradio_sessions/` stays tidy.
+- Each run produces a ZIP bundle (`result.mmd`, figures, annotated layouts, logs) ready for download.
+
+Controls let you override the prompt, crop mode, CUDA device list, GPU memory utilisation, and PDF-specific knobs (`max concurrency`, `num workers`, `skip repeat`). The “Keep models loaded” toggle reuses the same vLLM weights across submissions; click “Unload Models” to free GPU memory manually. Each run creates a session under `outputs/gradio_sessions/`, and the downloaded archive also includes a `gradio_run.log` with console output. Use the prompt-template dropdown to populate the textbox with a preset, adjust the GPU memory slider (default 0.8 ≈ 80%), and feel free to tweak the textbox before running. Use `--port` to pick a different port, `--share` for public links, `--queue` to enable Gradio’s request queue, and `--allow-path <dir>` to expose extra directories for downloads if needed.
+
+>**Note**: plan for ≈10 GB of free VRAM for the default gundam (hi-res) mode. Lower the slider/flag if your GPU has less headroom.
+
+
+### Vision Modes
+
+
+| Mode | Base Size | Image Size |	Crop Mode |	Notes |
+|-|-|-|-|-|
+| `base` |	1024	| 1024 |	False	| Standard quality |
+| `gundam (hi-res)` |	1024 |	640	| True |	Dynamic high-res crops (default) |
+
+Switch via `--mode` (CLI), the Gradio dropdown, or `DEEPREADER_MODE`.
+
+
+### Prompt Templates
+
+Named templates keep prompts consistent across runs:
+
+- `document`: `<image>\n<|grounding|>Convert the document to markdown.`
+- `other_image`: `<image>\n<|grounding|>OCR this image.`
+- `without_layouts`: `<image>\nFree OCR.`
+- `figures`: `<image>\nParse the figure.`
+- `general`: `<image>\nDescribe this image in detail.`
+- `rec`: `<image>\nLocate <|ref|>xxxx<|/ref|> in the image.`
+
+Select them via the template dropdown/CLI flag/env var, or exceed with a custom `--prompt`.
 
 
 ## Image OCR Pipeline (CLI)
@@ -87,52 +136,6 @@ You'll get:
 - `images/`: page-level crops.
 
 Disable repeat filtering with `--skip-repeat false` if you need every page’s raw output.
-
-## Gradio Interface
-
-Launch an interactive UI that accepts image or PDF uploads and returns a zipped bundle (Markdown, annotated layouts, figure crops):
-
-```bash
-python run_deepreader_gradio.py --host 0.0.0.0 --port 10086 --no-browser
-```
-
-Features:
-
-- Upload image/PDF from the left column, pick a vision mode (`base` or `gundam (hi-res)`), and select a prompt template.
-- Adjust GPU memory utilisation (default 0.8 ≈ 80% usage) and device ID.
-- Toggle “Keep models loaded” to reuse the engine between runs; click “Unload Models” to free VRAM.
-- Gradio keeps only the latest 20 sessions and drops anything older than 24 hours, so `outputs/gradio_sessions/` stays tidy.
-- Each run produces a ZIP bundle (`result.mmd`, figures, annotated layouts, logs) ready for download.
-
-Controls let you override the prompt, crop mode, CUDA device list, GPU memory utilisation, and PDF-specific knobs (`max concurrency`, `num workers`, `skip repeat`). The “Keep models loaded” toggle reuses the same vLLM weights across submissions; click “Unload Models” to free GPU memory manually. Each run creates a session under `outputs/gradio_sessions/`, and the downloaded archive also includes a `gradio_run.log` with console output. Use the prompt-template dropdown to populate the textbox with a preset, adjust the GPU memory slider (default 0.8 ≈ 80%), and feel free to tweak the textbox before running. Use `--port` to pick a different port, `--share` for public links, `--queue` to enable Gradio’s request queue, and `--allow-path <dir>` to expose extra directories for downloads if needed.
-
->**Note**: plan for ≈10 GB of free VRAM for the default gundam (hi-res) mode. Lower the slider/flag if your GPU has less headroom.
-
-
-### Vision Modes
-
-
-| Mode | Base Size | Image Size |	Crop Mode |	Notes |
-|-|-|-|-|-|
-| `base` |	1024	| 1024 |	False	| Standard quality |
-| `gundam (hi-res)` |	1024 |	640	| True |	Dynamic high-res crops (default) |
-
-Switch via `--mode` (CLI), the Gradio dropdown, or `DEEPREADER_MODE`.
-
-
-### Prompt Templates
-
-Named templates keep prompts consistent across runs:
-
-- `document`: `<image>\n<|grounding|>Convert the document to markdown.`
-- `other_image`: `<image>\n<|grounding|>OCR this image.`
-- `without_layouts`: `<image>\nFree OCR.`
-- `figures`: `<image>\nParse the figure.`
-- `general`: `<image>\nDescribe this image in detail.`
-- `rec`: `<image>\nLocate <|ref|>xxxx<|/ref|> in the image.`
-
-Select them via the template dropdown/CLI flag/env var, or exceed with a custom `--prompt`.
-
 
 ## Changelog
 
