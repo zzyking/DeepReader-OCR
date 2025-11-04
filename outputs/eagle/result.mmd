@@ -1,0 +1,43 @@
+
+Our proposed greedy knapsack method def balanced_greedy_knapsack(samples, L): # Step 1: Sort the samples samples.sort(reverse=True) total_length \(=\) sum(samples) min_knapsacks \(=\) (total_length \(^+\) L- 1) // L # Step 2: Initialize knapsacks knapsacks \(= [[]\) for _ in range(min_knapsacks) ] knapsack_lengths \(= [0] * \min\) knapsacks # Step 3: Distribute samples across knapsacks ks_index \(= 0\) sample_index \(= 0\) while sample_index \(< \mathrm{len}\) (samples): length \(=\) samples[sample_index] if knapsack_lengths[ks_index]+length \(< = \mathrm{L}\) knapsacks[ks_index].append(length) knapsack_lengths[ks_index] += length sample_index \(^{+ = 1}\) else: knapsacks.append([]) knapsack_lengths.append(0) ks_index \(=\) argmin(knapsack_lengths) return knapsacks  
+
+
+return knapsacks  
+
+
+Figure 10 | Python code for the proposed balance- aware greedy knapsack method. \(L\) is the max length and "samples" is a list of token lengths.  
+
+
+uneven length distributions. As shown in Fig. 9, the naive greedy knapsack method groups long and short samples separately, which is not desirable to model training.  
+
+
+Therefore, we design a balance- aware greedy knapsack algorithm that creates packs with a more uniform length distribution, as shown in Fig. 10, ensuring that each pack contains both long and short samples. Unlike SPFHP (Shortest- Pack- First Histogram Packing) [182], our method prioritizes balanced length distribution over packing efficiency, helping balance loss weights between long and short samples. Further details are in the appendix.  
+
+
+### 2.4. Tiled Mixture of Vision Encoders  
+
+
+Following Eagle [22], we use SigLIP [23] and ConvNeXt- XXLarge [24, 183] as vision encoders. Additionally, to handle arbitrarily high- resolution images, we employ image tiling following InternVL- 1.5 [21]. The input resolution of every image tile of SigLIP is \(448 \times 448\) , while the input size of ConvNeXt is \(512 \times 512\) . To make sure they output same number of image tokens, we use PixelShuffle to conduct a \(2 \times\) downsampling on the image features from SigLIP, resulting a feature shape of \(16 \times 16\) , matching the output size of ConvNeXt ( \(32 \times\) downsampling of input). We then concatenate these features along the channel dimension and align with LLM via an MLP layer.  
+
+![](images/0.jpg)
+
+
+<center>Figure 11 | Tiled Mixture of Vision Encoders. </center>  
+
+
+## 3. Experiments  
+
+
+### 3.1. Evolution of Eagle 2  
+
+
+Scaling Stage- 2 training data. We initially explore the impact of scaling Stage- 2 data, as shown in Tab. 5. Our findings reveal that model's overall performance improved steadily with additional data, with the most notable gains arising from the inclusion of 2M (million) VQA samples focused on charts, tables, and OCR. While data scaling indicates potential for further gains beyond 10M samples, our experiments' costs have risen sharply, and the efficiency of data iteration has decreased. Moreover, we observe considerable performance fluctuations across specific benchmarks at this scale, especially in challenging benchmarks like MMMU, MathVista, and MMVet. Another obstacle is that, as illustrated by the data- performance growth trend in Fig.2, reaching the performance of frontier VLMs like Qwen2- VL would be difficult. These challenges leads us to consider adopting a more effective training strategy.  
+
+
+Introducing Stage- 1.5. To build a robust pre- trained model, we implement Stage- 1.5 where we focus on maximizing the data utilization to strengthen the model's foundational capabilities. As shown in Tab. 6, the Stage- 1.5 checkpoint is competitive by itself, and subsequent Stage- 2 training further improves the previous best model's performance by average \(3.9\%\) .  
+
+
+Naive data selection. Using a naive data selection strategy with maximum thresholds and random sampling, we reduce the training data to \(8.6\mathrm{M}\) ; unfortunately, this led to a decline in performance. We speculate it might be that the randomly selected data have inadvertently excluded some valuable samples, while also failing to adequately ensure a balanced data distribution.  
+
+
+Data formatting & filtering. After filtering low- quality data and formatting the training set, we see clear improvements on 8 out of 14 benchmarks, including a remarkable 45- point gain on OCRBench [180]. This implies the im
