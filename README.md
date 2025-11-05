@@ -26,7 +26,6 @@ pip install -r requirements.txt
 Optional extras:
 
 - `pip install flash-attn==2.7.3 --no-build-isolation` (faster attention if supported).
-- `export TMPDIR=$PWD/outputs/tmp` when `/tmp` isn’t writable.
 
 ## Configuration Strategy
 
