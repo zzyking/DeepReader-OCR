@@ -170,7 +170,7 @@ The helper merges both pipelines, shares a single `AsyncLLMEngine`, and respects
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
-| 0.2.0   | 2025-11-08 | Mixed image/PDF concurrency via shared `AsyncLLMEngine`, reusable batching helpers, Gradio backend upgraded to the unified runner |
+| 0.2.0   | 2025-11-06 | Mixed image/PDF concurrency via shared `AsyncLLMEngine`, reusable batching helpers, Gradio backend upgraded to the unified runner |
 | 0.1.0   | 2025-11-04 | Initial public drop: shared vLLM engine cache, mode/prompt presets, GPU memory control, refreshed Gradio UI, session auto-cleanup |
 
 
