@@ -19,6 +19,7 @@ from tqdm import tqdm
 from process.ngram_norepeat import NoRepeatNGramLogitsProcessor
 from process.image_process import DeepseekOCRProcessor
 from engine_cache import get_engine, unload_all_engines
+from concurrency import run_concurrent_generation
 import config
 from vllm import AsyncLLMEngine
 
@@ -197,6 +198,97 @@ def process_image_with_refs(image, ref_texts, output_dir):
     return result_image
 
 
+def _make_image_result_handler(job: dict):
+    def _handle(text: str) -> None:
+        job["result"] = text
+        if job["save_results"] and "<image>" in job["prompt"]:
+            print('=' * 15 + 'save results:' + '=' * 15)
+            _write_results(text, job["image"], job["output_path"])
+
+    return _handle
+
+
+def prepare_image_jobs(
+    request_specs: list[dict],
+    crop_mode: bool,
+    sampling_params: SamplingParams | None = None,
+) -> list[dict]:
+    sampling_params = sampling_params or make_sampling_params()
+    jobs: list[dict] = []
+    for spec in request_specs:
+        input_path = resolve_path(spec["input"])
+        output_path = resolve_path(spec.get("output", config.OUTPUT_PATH))
+        prompt_text = spec.get("prompt") or config.PROMPT
+        save_results = bool(spec.get("save_results", True))
+
+        os.makedirs(output_path, exist_ok=True)
+        os.makedirs(os.path.join(output_path, "images"), exist_ok=True)
+
+        image = load_image(input_path)
+        if image is None:
+            raise FileNotFoundError(f"Unable to load image: {input_path}")
+        image = image.convert("RGB")
+
+        payload = {"prompt": prompt_text}
+        if "<image>" in prompt_text:
+            image_features = DeepseekOCRProcessor().tokenize_with_images(
+                images=[image], bos=True, eos=True, cropping=crop_mode, prompt=prompt_text
+            )
+            payload["multi_modal_data"] = {"image": image_features}
+
+        job: dict = {
+            "type": "image",
+            "input_path": input_path,
+            "output_path": output_path,
+            "prompt": prompt_text,
+            "save_results": save_results,
+            "image": image,
+            "payload": payload,
+            "sampling_params": sampling_params,
+            "result": None,
+            "handle_result": None,
+        }
+        job["handle_result"] = _make_image_result_handler(job)
+        jobs.append(job)
+    return jobs
+
+
+def run_image_batch(
+    batch_requests: list[dict],
+    model_path: str | None = None,
+    crop_mode: bool | None = None,
+    cuda_visible_devices: str | None = None,
+    gpu_memory_utilization: float | None = None,
+    max_concurrency: int | None = None,
+    keep_model_loaded: bool = True,
+) -> list[str]:
+    if not batch_requests:
+        return []
+
+    model_path = model_path or config.MODEL_PATH
+    if crop_mode is None:
+        crop_mode = config.CROP_MODE
+
+    sampling_params = make_sampling_params()
+    jobs = prepare_image_jobs(batch_requests, crop_mode, sampling_params=sampling_params)
+
+    engine, _ = get_engine(model_path, cuda_visible_devices, gpu_memory_utilization)
+    request_queue = [(job["payload"], job["sampling_params"]) for job in jobs]
+    outputs = run_concurrent_generation(
+        engine=engine,
+        requests=request_queue,
+        max_concurrency=max_concurrency,
+    )
+
+    for job, text in zip(jobs, outputs, strict=False):
+        job["handle_result"](text)
+
+    if not keep_model_loaded:
+        unload_image_engines()
+
+    return [job["result"] for job in jobs]
+
+
 async def stream_generate(engine: AsyncLLMEngine, sampling_params: SamplingParams, image=None, prompt=''):
     request_id = f"request-{int(time.time())}"
 
@@ -305,35 +397,31 @@ def run_image_pipeline(
     model_path = model_path or config.MODEL_PATH
     if crop_mode is None:
         crop_mode = config.CROP_MODE
-    os.makedirs(output_path, exist_ok=True)
-    os.makedirs(os.path.join(output_path, "images"), exist_ok=True)
 
-    image = load_image(input_path)
-    if image is None:
-        raise FileNotFoundError(f"Unable to load image: {input_path}")
-    image = image.convert('RGB')
-
-    effective_prompt = prompt
-
-    if '<image>' in effective_prompt:
-        image_features = DeepseekOCRProcessor().tokenize_with_images(
-            images=[image], bos=True, eos=True, cropping=crop_mode, prompt=effective_prompt
-        )
-    else:
-        image_features = ''
+    sampling_params = make_sampling_params()
+    job = prepare_image_jobs(
+        [
+            {
+                "input": input_path,
+                "output": output_path,
+                "prompt": prompt,
+                "save_results": save_results,
+            }
+        ],
+        crop_mode=crop_mode,
+        sampling_params=sampling_params,
+    )[0]
 
     engine, _ = get_engine(model_path, cuda_visible_devices, gpu_memory_utilization)
-    sampling_params = make_sampling_params()
-    result_out = asyncio.run(stream_generate(engine, sampling_params, image_features, effective_prompt))
+    image_features = job["payload"].get("multi_modal_data", {}).get("image")
+    result_out = asyncio.run(stream_generate(engine, sampling_params, image_features, job["prompt"]))
 
-    if save_results and '<image>' in effective_prompt:
-        print('=' * 15 + 'save results:' + '=' * 15)
-        _write_results(result_out, image, output_path)
+    job["handle_result"](result_out)
 
     if not keep_model_loaded:
         unload_image_engines()
 
-    return result_out
+    return job["result"]
 
 
 def main():

@@ -1,9 +1,7 @@
 import argparse
-import asyncio
 import io
 import os
 import re
-import time
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
 from typing import List
@@ -31,6 +29,7 @@ from vllm import SamplingParams
 from process.ngram_norepeat import NoRepeatNGramLogitsProcessor
 from process.image_process import DeepseekOCRProcessor
 from engine_cache import get_engine, unload_all_engines
+from concurrency import run_concurrent_generation
 
 ModelRegistry.register_model("DeepseekOCRForCausalLM", DeepseekOCRForCausalLM)
 
@@ -269,37 +268,27 @@ def process_single_image(image, prompt_text, crop_mode):
     return cache_item
 
 
-def run_pdf_pipeline(
+def _make_pdf_result_handler(context: dict, page_index: int):
+    def _handle(text: str) -> None:
+        context["page_outputs"][page_index] = text
+
+    return _handle
+
+
+def prepare_pdf_jobs(
     input_path: str,
     output_path: str,
     prompt_text: str,
-    model_path: str | None = None,
-    crop_mode: bool | None = None,
-    skip_repeat: bool | None = None,
-    max_concurrency: int | None = None,
-    num_workers: int | None = None,
-    cuda_visible_devices: str | None = None,
-    gpu_memory_utilization: float | None = None,
-    keep_model_loaded: bool = True,
-) -> str:
-    model_path = model_path or config.MODEL_PATH
-    if crop_mode is None:
-        crop_mode = config.CROP_MODE
-    if skip_repeat is None:
-        skip_repeat = config.SKIP_REPEAT
-    if max_concurrency is None:
-        max_concurrency = config.MAX_CONCURRENCY
-    if num_workers is None:
-        num_workers = config.NUM_WORKERS
-
+    crop_mode: bool,
+    skip_repeat: bool,
+    num_workers: int,
+) -> tuple[list[dict], dict]:
     os.makedirs(output_path, exist_ok=True)
     os.makedirs(os.path.join(output_path, 'images'), exist_ok=True)
 
     print(f'{Colors.RED}PDF loading .....{Colors.RESET}')
 
     images = pdf_to_images_high_quality(input_path)
-
-    engine, _ = get_engine(model_path, cuda_visible_devices, gpu_memory_utilization)
     sampling_params = make_pdf_sampling_params()
 
     process_fn = partial(process_single_image, prompt_text=prompt_text, crop_mode=crop_mode)
@@ -318,20 +307,38 @@ def run_pdf_pipeline(
         if "<image>" not in prompt_value:
             item.pop("multi_modal_data", None)
 
-    async def _generate_batch(requests: List[dict]) -> List[str]:
-        results: List[str] = []
-        for idx, payload in enumerate(requests):
-            request_id = f"pdf-{int(time.time())}-{idx}"
-            final_text = ""
-            async for output in engine.generate(payload, sampling_params, request_id):
-                if output.outputs:
-                    final_text = output.outputs[0].text
-            results.append(final_text)
-        return results
-
-    outputs_list = asyncio.run(_generate_batch(batch_inputs))
-
     base_name = os.path.splitext(os.path.basename(input_path))[0]
+
+    context = {
+        "input_path": input_path,
+        "output_path": output_path,
+        "skip_repeat": skip_repeat,
+        "images": images,
+        "base_name": base_name,
+        "page_outputs": [None] * len(batch_inputs),
+    }
+
+    jobs: list[dict] = []
+    for page_index, payload in enumerate(batch_inputs):
+        job = {
+            "type": "pdf",
+            "page_index": page_index,
+            "payload": payload,
+            "sampling_params": sampling_params,
+            "handle_result": _make_pdf_result_handler(context, page_index),
+        }
+        jobs.append(job)
+
+    return jobs, context
+
+
+def finalize_pdf_outputs(context: dict) -> str:
+    output_path = context["output_path"]
+    base_name = context["base_name"]
+    skip_repeat = context["skip_repeat"]
+    images = context["images"]
+    page_outputs = context["page_outputs"]
+
     mmd_det_path = os.path.join(output_path, f'{base_name}_det.mmd')
     mmd_path = os.path.join(output_path, f'{base_name}.mmd')
     pdf_out_path = os.path.join(output_path, f'{base_name}_layouts.pdf')
@@ -340,7 +347,9 @@ def run_pdf_pipeline(
     contents = ''
     draw_images = []
 
-    for jdx, (content, img) in enumerate(zip(outputs_list, images)):
+    for jdx, (content, img) in enumerate(zip(page_outputs, images)):
+        if content is None:
+            continue
 
         if '<｜end▁of▁sentence｜>' in content:
             content = content.replace('<｜end▁of▁sentence｜>', '')
@@ -374,6 +383,53 @@ def run_pdf_pipeline(
         afile.write(contents)
 
     pil_to_pdf_img2pdf(draw_images, pdf_out_path)
+    return mmd_path
+
+
+def run_pdf_pipeline(
+    input_path: str,
+    output_path: str,
+    prompt_text: str,
+    model_path: str | None = None,
+    crop_mode: bool | None = None,
+    skip_repeat: bool | None = None,
+    max_concurrency: int | None = None,
+    num_workers: int | None = None,
+    cuda_visible_devices: str | None = None,
+    gpu_memory_utilization: float | None = None,
+    keep_model_loaded: bool = True,
+) -> str:
+    model_path = model_path or config.MODEL_PATH
+    if crop_mode is None:
+        crop_mode = config.CROP_MODE
+    if skip_repeat is None:
+        skip_repeat = config.SKIP_REPEAT
+    if max_concurrency is None:
+        max_concurrency = config.MAX_CONCURRENCY
+    if num_workers is None:
+        num_workers = config.NUM_WORKERS
+
+    jobs, context = prepare_pdf_jobs(
+        input_path=input_path,
+        output_path=output_path,
+        prompt_text=prompt_text,
+        crop_mode=crop_mode,
+        skip_repeat=skip_repeat,
+        num_workers=num_workers,
+    )
+
+    engine, _ = get_engine(model_path, cuda_visible_devices, gpu_memory_utilization)
+    request_queue = [(job["payload"], job["sampling_params"]) for job in jobs]
+    outputs_list = run_concurrent_generation(
+        engine=engine,
+        requests=request_queue,
+        max_concurrency=max_concurrency,
+    )
+
+    for job, text in zip(jobs, outputs_list, strict=False):
+        job["handle_result"](text)
+
+    mmd_path = finalize_pdf_outputs(context)
 
     if not keep_model_loaded:
         unload_pdf_models()

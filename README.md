@@ -60,6 +60,7 @@ Features:
 - Upload image/PDF from the left column, pick a vision mode (`base` or `gundam (hi-res)`), and select a prompt template.
 - Adjust GPU memory utilisation (default 0.8 ≈ 80% usage) and device ID.
 - Toggle “Keep models loaded” to reuse the engine between runs; click “Unload Models” to free VRAM.
+- Mixed workloads (single images + PDFs) share one GPU via the unified concurrency helper used by the Gradio backend, so simultaneous users no longer block each other.
 - Gradio keeps only the latest 20 sessions and drops anything older than 24 hours, so `outputs/gradio_sessions/` stays tidy.
 - Each run produces a ZIP bundle (`result.mmd`, figures, annotated layouts, logs) ready for download.
 
@@ -123,6 +124,7 @@ python run_dpsk_ocr_pdf.py \
   --output ../../outputs/paper_pdf_run \
   --mode gundam \
   --prompt-template document \
+  --max-concurrency 4 \
   --gpu-memory-util 0.8 \
   --cuda-visible-devices 0 \
   --keep-model-loaded true
@@ -137,10 +139,38 @@ You'll get:
 
 Disable repeat filtering with `--skip-repeat false` if you need every page’s raw output.
 
+For single-GPU concurrent inference, tune `--max-concurrency` (or `DEEPREADER_MAX_CONCURRENCY`) to bound how many vLLM requests can run in parallel. The PDF pipeline now dispatches batched generations through the shared `AsyncLLMEngine`, so multiple pages—or queued user runs from Gradio—share one GPU without blocking each other.
+
+### Mixed Image/PDF Concurrency
+
+When you need to process standalone images and PDF documents at the same time, reach for `DeepSeek-OCR-master/DeepSeek-OCR-vllm/mixed_runner.py`:
+
+```python
+from DeepSeek-OCR-master.DeepSeek-OCR-vllm.mixed_runner import run_mixed_image_pdf
+
+result = run_mixed_image_pdf(
+    image_requests=[
+        {"input": "./images/sample.png", "output": "./outputs/sample_mix_a"},
+        {"input": "./images/sample2.png", "output": "./outputs/sample_mix_b"},
+    ],
+    pdf_requests=[
+        {"input": "./docs/paper.pdf", "output": "./outputs/paper_mix"},
+    ],
+    max_concurrency=4,
+    cuda_visible_devices="0",
+)
+
+print(result["image_results"][0])
+print(result["pdf_results"][0]["mmd_path"])
+```
+
+The helper merges both pipelines, shares a single `AsyncLLMEngine`, and respects per-request overrides (prompt, crop mode, skip-repeat). The return payload mirrors image transcripts and PDF artifact paths so higher-level services can dispatch outputs to the correct clients.
+
 ## Changelog
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
+| 0.2.0   | 2025-11-08 | Mixed image/PDF concurrency via shared `AsyncLLMEngine`, reusable batching helpers, Gradio backend upgraded to the unified runner |
 | 0.1.0   | 2025-11-04 | Initial public drop: shared vLLM engine cache, mode/prompt presets, GPU memory control, refreshed Gradio UI, session auto-cleanup |
 
 

@@ -20,8 +20,9 @@ os.environ['GRADIO_TEMP_DIR'] = './tmp'
 
 import gradio as gr  # noqa: E402
 import config  # noqa: E402
-from run_dpsk_ocr_image import run_image_pipeline, unload_image_engines  # noqa: E402
-from run_dpsk_ocr_pdf import run_pdf_pipeline, unload_pdf_models  # noqa: E402
+from run_dpsk_ocr_image import unload_image_engines  # noqa: E402
+from run_dpsk_ocr_pdf import unload_pdf_models  # noqa: E402
+from mixed_runner import run_mixed_image_pdf  # noqa: E402
 
 SESSION_ROOT = (APP_ROOT / "outputs" / "gradio_sessions").resolve()
 SESSION_ROOT.mkdir(parents=True, exist_ok=True)
@@ -61,18 +62,16 @@ def _safe_int(value: Optional[str]) -> Optional[int]:
         return None
 
 
-def _prepare_session(input_file_path: str) -> Tuple[Path, Path, Path, Path]:
+def _prepare_session(input_file_path: str) -> Tuple[Path, Path, Path]:
     input_suffix = Path(input_file_path).suffix.lower()
     session_id = uuid.uuid4().hex
     session_dir = SESSION_ROOT / session_id
     output_dir = session_dir / "output"
-    tmp_dir = session_dir / "tmp"
     session_dir.mkdir(parents=True, exist_ok=True)
     output_dir.mkdir(parents=True, exist_ok=True)
-    tmp_dir.mkdir(parents=True, exist_ok=True)
     input_target = session_dir / f"input{input_suffix}"
     shutil.copy(input_file_path, input_target)
-    return session_dir, output_dir, tmp_dir, input_target
+    return session_dir, output_dir, input_target
 
 
 def run_deepreader(
@@ -98,7 +97,7 @@ def run_deepreader(
 
     cleanup_sessions()
 
-    session_dir, output_dir, tmp_dir, staged_input = _prepare_session(str(input_path))
+    session_dir, output_dir, staged_input = _prepare_session(str(input_path))
 
     mode_choice = (mode or ("gundam (hi-res)" if config.ACTIVE_MODE == "gundam" else "base")).lower()
     mode_map = {
@@ -117,42 +116,55 @@ def run_deepreader(
     effective_crop_mode = config.CROP_MODE
     is_pdf = suffix == ".pdf"
 
-    previous_tmp = os.environ.get("TMPDIR")
-    os.environ["TMPDIR"] = str(tmp_dir)
-
     buffer = io.StringIO()
     try:
         with redirect_stdout(buffer), redirect_stderr(buffer):
+            mc_value = _safe_int(max_concurrency)
+            nw_value = _safe_int(num_workers)
+
+            image_specs = []
+            pdf_specs = []
+
             if is_pdf:
-                mc_value = _safe_int(max_concurrency)
-                nw_value = _safe_int(num_workers)
-
-                kwargs = {}
-                if mc_value:
-                    kwargs["max_concurrency"] = mc_value
-                if nw_value:
-                    kwargs["num_workers"] = nw_value
-
-                run_pdf_pipeline(
-                    input_path=str(staged_input),
-                    output_path=str(output_dir),
-                    prompt_text=runtime_prompt,
-                    crop_mode=effective_crop_mode,
-                    skip_repeat=skip_repeat,
-                    cuda_visible_devices=cuda_visible_devices or None,
-                    gpu_memory_utilization=gpu_mem_util,
-                    keep_model_loaded=keep_models_loaded,
-                    **kwargs,
+                pdf_specs.append(
+                    {
+                        "input": str(staged_input),
+                        "output": str(output_dir),
+                        "prompt": runtime_prompt,
+                        "crop_mode": effective_crop_mode,
+                        "skip_repeat": skip_repeat,
+                        "num_workers": nw_value or config.NUM_WORKERS,
+                    }
                 )
             else:
-                run_image_pipeline(
-                    input_path=str(staged_input),
-                    output_path=str(output_dir),
-                    prompt=runtime_prompt,
-                    crop_mode=effective_crop_mode,
-                    cuda_visible_devices=cuda_visible_devices or None,
-                    gpu_memory_utilization=gpu_mem_util,
-                    keep_model_loaded=keep_models_loaded,
+                image_specs.append(
+                    {
+                        "input": str(staged_input),
+                        "output": str(output_dir),
+                        "prompt": runtime_prompt,
+                        "crop_mode": effective_crop_mode,
+                        "save_results": True,
+                    }
+                )
+
+            result_bundle = run_mixed_image_pdf(
+                image_requests=image_specs,
+                pdf_requests=pdf_specs,
+                max_concurrency=mc_value,
+                cuda_visible_devices=cuda_visible_devices or None,
+                gpu_memory_utilization=gpu_mem_util,
+                keep_model_loaded=keep_models_loaded,
+            )
+
+            if image_specs and result_bundle["image_results"]:
+                print("[gradio] image transcription completed.")
+            if pdf_specs and result_bundle["pdf_results"]:
+                primary = result_bundle["pdf_results"][0]
+                print(
+                    "[gradio] pdf artifacts:",
+                    primary["mmd_path"],
+                    primary["mmd_det_path"],
+                    primary["layouts_pdf_path"],
                 )
     except Exception:
         unload_image_engines()
@@ -161,12 +173,6 @@ def run_deepreader(
         log_text = buffer.getvalue() + f"\n[error]\n{error_trace}"
         (output_dir / "gradio_run.log").write_text(log_text, encoding="utf-8")
         return None, log_text.strip()
-    finally:
-        if previous_tmp is not None:
-            os.environ["TMPDIR"] = previous_tmp
-        else:
-            os.environ.pop("TMPDIR", None)
-
     log_text = buffer.getvalue()
 
     (output_dir / "gradio_run.log").write_text(log_text, encoding="utf-8")
