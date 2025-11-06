@@ -202,7 +202,7 @@ def build_interface() -> gr.Blocks:
     with gr.Blocks(title="DeepReader Gradio Interface", css=section_css) as demo:
         gr.Markdown(
             """
-            # DeepReader
+            # DeepReader [![GitHub stars](https://img.shields.io/github/stars/zzyking/DeepReader?style=social)](https://github.com/zzyking/DeepReader)
             Upload an image or PDF to generate Markdown, figure crops, and annotated layouts.
             The pipeline runs the appropriate DeepSeek-OCR flow and returns a zipped bundle of results.
             ## Usage Notes
