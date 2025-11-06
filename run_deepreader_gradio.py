@@ -53,13 +53,16 @@ def cleanup_sessions(max_sessions: int = 20, max_age_hours: int = 24) -> None:
             shutil.rmtree(path, ignore_errors=True)
 
 
-def _safe_int(value: Optional[str]) -> Optional[int]:
-    if value is None or value == "" or value is False:
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+def _env_bool(var_name: str, default: bool) -> bool:
+    value = os.getenv(var_name)
+    if value is None:
+        return default
+    value = value.strip().lower()
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
 
 
 def _prepare_session(input_file_path: str) -> Tuple[Path, Path, Path]:
@@ -79,12 +82,6 @@ def run_deepreader(
     mode: str,
     template: str,
     prompt: str,
-    gpu_mem_util: float,
-    cuda_visible_devices: str,
-    max_concurrency: str,
-    num_workers: str,
-    skip_repeat: bool,
-    keep_models_loaded: bool,
 ):
     if not uploaded_file:
         return None, "No file submitted. Please upload an image or PDF."
@@ -98,6 +95,10 @@ def run_deepreader(
     cleanup_sessions()
 
     session_dir, output_dir, staged_input = _prepare_session(str(input_path))
+
+    cuda_visible_devices = os.getenv("DEEPREADER_CUDA_VISIBLE_DEVICES", os.environ.get("CUDA_VISIBLE_DEVICES", "0"))
+    cuda_visible_devices = cuda_visible_devices.strip() or None
+    keep_models_loaded = _env_bool("DEEPREADER_KEEP_MODELS_LOADED", True)
 
     mode_choice = (mode or ("gundam (hi-res)" if config.ACTIVE_MODE == "gundam" else "base")).lower()
     mode_map = {
@@ -116,12 +117,10 @@ def run_deepreader(
     effective_crop_mode = config.CROP_MODE
     is_pdf = suffix == ".pdf"
 
+    gpu_mem_util = config.GPU_MEMORY_UTILIZATION
     buffer = io.StringIO()
     try:
         with redirect_stdout(buffer), redirect_stderr(buffer):
-            mc_value = _safe_int(max_concurrency)
-            nw_value = _safe_int(num_workers)
-
             image_specs = []
             pdf_specs = []
 
@@ -132,8 +131,6 @@ def run_deepreader(
                         "output": str(output_dir),
                         "prompt": runtime_prompt,
                         "crop_mode": effective_crop_mode,
-                        "skip_repeat": skip_repeat,
-                        "num_workers": nw_value or config.NUM_WORKERS,
                     }
                 )
             else:
@@ -150,8 +147,7 @@ def run_deepreader(
             result_bundle = run_mixed_image_pdf(
                 image_requests=image_specs,
                 pdf_requests=pdf_specs,
-                max_concurrency=mc_value,
-                cuda_visible_devices=cuda_visible_devices or None,
+                cuda_visible_devices=cuda_visible_devices,
                 gpu_memory_utilization=gpu_mem_util,
                 keep_model_loaded=keep_models_loaded,
             )
@@ -167,8 +163,7 @@ def run_deepreader(
                     primary["layouts_pdf_path"],
                 )
     except Exception:
-        unload_image_engines()
-        unload_pdf_models()
+        unload_models()
         error_trace = traceback.format_exc()
         log_text = buffer.getvalue() + f"\n[error]\n{error_trace}"
         (output_dir / "gradio_run.log").write_text(log_text, encoding="utf-8")
@@ -194,68 +189,61 @@ def unload_models() -> tuple[Optional[str], str]:
 
 
 def build_interface() -> gr.Blocks:
-    default_cuda = os.getenv("DEEPREADER_CUDA_VISIBLE_DEVICES", os.environ.get("CUDA_VISIBLE_DEVICES", ""))
+    section_css = """
+    .section-box {
+        border: 1px solid var(--border-color-primary);
+        border-radius: 12px;
+        padding: 18px;
+        background: var(--panel-background-fill);
+        box-shadow: 0 6px 20px rgba(15, 23, 42, 0.08);
+    }
+    """
 
-    with gr.Blocks(title="DeepReader Gradio Interface") as demo:
+    with gr.Blocks(title="DeepReader Gradio Interface", css=section_css) as demo:
         gr.Markdown(
             """
             # DeepReader
             Upload an image or PDF to generate Markdown, figure crops, and annotated layouts.
             The pipeline runs the appropriate DeepSeek-OCR flow and returns a zipped bundle of results.
+            ## Usage Notes
+            - Allocate ≥10 GB free VRAM for smooth inference.
+            - Advanced runtime options (devices, batching, memory) follow backend defaults.
             """
         )
-
-        with gr.Row(equal_height=True):
-            with gr.Column(scale=3, min_width=360):
-                gr.Markdown("### Document Input & Prompt")
-                file_input = gr.File(label="Document (image or PDF)", file_types=None, type="filepath")
-                current_mode_display = "gundam (hi-res)" if config.ACTIVE_MODE == "gundam" else "base"
-                with gr.Row():
-                    mode_dropdown = gr.Dropdown(
-                        label="Vision mode",
-                        choices=["base", "gundam (hi-res)"],
-                        value=current_mode_display,
+        with gr.Column(elem_classes="section-box"):
+            gr.Markdown("### Inputs")
+            with gr.Row(equal_height=True):
+                with gr.Column():
+                    file_input = gr.File(label="Document (image or PDF)", file_types=None, type="filepath")
+                with gr.Column():
+                    current_mode_display = "gundam (hi-res)" if config.ACTIVE_MODE == "gundam" else "base"
+                    with gr.Row():
+                        mode_dropdown = gr.Dropdown(
+                            label="Vision mode",
+                            choices=["base", "gundam (hi-res)"],
+                            value=current_mode_display,
+                        )
+                        template_dropdown = gr.Dropdown(
+                            label="Prompt template",
+                            choices=sorted(config.PROMPT_TEMPLATES.keys()),
+                            value=config.DEFAULT_TEMPLATE,
+                        )
+                    prompt_input = gr.Textbox(
+                        label="Prompt",
+                        value=config.PROMPT,
+                        lines=4,
+                        placeholder="<image>\n<|grounding|>Convert the document to markdown.",
                     )
-                    template_dropdown = gr.Dropdown(
-                        label="Prompt template",
-                        choices=sorted(config.PROMPT_TEMPLATES.keys()),
-                        value=config.DEFAULT_TEMPLATE,
-                    )
-                prompt_input = gr.Textbox(
-                    label="Prompt",
-                    value=config.PROMPT,
-                    lines=6,
-                    placeholder="<image>\n<|grounding|>Convert the document to markdown.",
-                )
 
-            with gr.Column(scale=2, min_width=260):
-                gr.Markdown("### Model Settings")
-                gpu_mem_slider = gr.Slider(
-                    label="GPU memory utilisation",
-                    minimum=0.1,
-                    maximum=1.0,
-                    value=config.GPU_MEMORY_UTILIZATION,
-                    step=0.05,
-                )
-                cuda_input = gr.Textbox(label="CUDA visible devices", value=default_cuda, placeholder="0")
-                keep_models_checkbox = gr.Checkbox(label="Keep models loaded", value=True)
-                gr.Markdown("Allocate ≥10 GB free VRAM for smooth inference.")
-
-                gr.Markdown("### Advanced Settings (No need to change)")
-                skip_repeat_checkbox = gr.Checkbox(label="Skip repeat pages (PDF only)", value=config.SKIP_REPEAT)
-                with gr.Row():
-                    max_concurrency_input = gr.Textbox(label="Max concurrency", value=str(config.MAX_CONCURRENCY))
-                    num_workers_input = gr.Textbox(label="Preprocess workers", value=str(config.NUM_WORKERS))
-        
-        with gr.Row(equal_height=True):
-            with gr.Column(scale=3, min_width=360):
-                run_button = gr.Button("Run DeepReader", variant="primary")
-                zip_output = gr.File(label="Zipped results", interactive=False)
-            
-            with gr.Column(scale=2, min_width=260):
-                unload_button = gr.Button("Unload Models", variant="secondary")
-                log_output = gr.Textbox(label="Inference log", lines=20)
-            
+        with gr.Column(elem_classes="section-box"):
+            gr.Markdown("### Outputs")
+            with gr.Row(equal_height=True):
+                with gr.Column():
+                    run_button = gr.Button("Run DeepReader", variant="primary")
+                    zip_output = gr.File(label="Zipped results", interactive=False)
+                with gr.Column():
+                    unload_button = gr.Button("Unload Models", variant="secondary")
+                    log_output = gr.Textbox(label="Inference log", lines=20)
 
         run_button.click(
             run_deepreader,
@@ -264,12 +252,6 @@ def build_interface() -> gr.Blocks:
                 mode_dropdown,
                 template_dropdown,
                 prompt_input,
-                gpu_mem_slider,
-                cuda_input,
-                max_concurrency_input,
-                num_workers_input,
-                skip_repeat_checkbox,
-                keep_models_checkbox,
             ],
             outputs=[zip_output, log_output],
         )

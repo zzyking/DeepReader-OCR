@@ -40,6 +40,7 @@ export DEEPREADER_PROMPT_TEMPLATE=document
 export DEEPREADER_MODE=gundam
 export DEEPREADER_CUDA_VISIBLE_DEVICES=0
 export DEEPREADER_GPU_MEM_UTIL=0.8
+export DEEPREADER_KEEP_MODELS_LOADED=1
 ```
 
 >**GPU tip**: the default vLLM config assumes ≈10 GB of free VRAM. Tune `DEEPREADER_GPU_MEM_UTIL` down if you’re memory-constrained.
@@ -57,15 +58,15 @@ python run_deepreader_gradio.py --host 0.0.0.0 --port 10086 --no-browser
 Features:
 
 - Upload image/PDF from the left column, pick a vision mode (`base` or `gundam (hi-res)`), and select a prompt template.
-- Adjust GPU memory utilisation (default 0.8 ≈ 80% usage) and device ID.
-- Toggle “Keep models loaded” to reuse the engine between runs; click “Unload Models” to free VRAM.
+- Backend device selection, concurrency, and GPU memory utilisation follow the `DEEPREADER_*` environment variables.
+- Use “Unload Models” to free the shared vLLM engine and release GPU memory between runs.
 - Mixed workloads (single images + PDFs) share one GPU via the unified concurrency helper used by the Gradio backend, so simultaneous users no longer block each other.
 - Gradio keeps only the latest 20 sessions and drops anything older than 24 hours, so `outputs/gradio_sessions/` stays tidy.
 - Each run produces a ZIP bundle (`result.mmd`, figures, annotated layouts, logs) ready for download.
 
-Controls let you override the prompt, crop mode, CUDA device list, GPU memory utilisation, and PDF-specific knobs (`max concurrency`, `num workers`, `skip repeat`). The “Keep models loaded” toggle reuses the same vLLM weights across submissions; click “Unload Models” to free GPU memory manually. Each run creates a session under `outputs/gradio_sessions/`, and the downloaded archive also includes a `gradio_run.log` with console output. Use the prompt-template dropdown to populate the textbox with a preset, adjust the GPU memory slider (default 0.8 ≈ 80%), and feel free to tweak the textbox before running. Use `--port` to pick a different port, `--share` for public links, `--queue` to enable Gradio’s request queue, and `--allow-path <dir>` to expose extra directories for downloads if needed.
+Use the prompt-template dropdown to populate the textbox with a preset and tweak the prompt before running. Advanced runtime knobs—CUDA device list, concurrency, worker counts, GPU memory fraction, repeat filtering, and cache retention—are controlled via environment variables or CLI flags (see the sections below). Each run creates a session under `outputs/gradio_sessions/`, and the downloaded archive also includes a `gradio_run.log` with console output. Use `--port` to pick a different port, `--share` for public links, `--queue` to enable Gradio’s request queue, and `--allow-path <dir>` to expose extra directories for downloads if needed.
 
->**Note**: plan for ≈10 GB of free VRAM for the default gundam (hi-res) mode. Lower the slider/flag if your GPU has less headroom.
+>**Note**: plan for ≈10 GB of free VRAM for the default gundam (hi-res) mode. Lower `DEEPREADER_GPU_MEM_UTIL` or the corresponding CLI flag if your GPU has less headroom.
 
 
 ### Vision Modes
@@ -163,12 +164,13 @@ print(result["image_results"][0])
 print(result["pdf_results"][0]["mmd_path"])
 ```
 
-The helper merges both pipelines, shares a single `AsyncLLMEngine`, and respects per-request overrides (prompt, crop mode, skip-repeat). The return payload mirrors image transcripts and PDF artifact paths so higher-level services can dispatch outputs to the correct clients.
+The helper merges both pipelines, shares a single `AsyncLLMEngine`, and respects per-request overrides (prompt, crop mode, skip-repeat). Tune concurrency, CUDA devices, GPU memory, and cache behaviour either via keyword arguments or the `DEEPREADER_*` environment variables. The return payload mirrors image transcripts and PDF artifact paths so higher-level services can dispatch outputs to the correct clients.
 
 ## Changelog
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
+| 0.2.1   | 2025-11-10 | Simplified Gradio UI with backend-driven runtime settings, shared unload helper, expanded mixed-runner overrides |
 | 0.2.0   | 2025-11-06 | Mixed image/PDF concurrency via shared `AsyncLLMEngine`, reusable batching helpers, Gradio backend upgraded to the unified runner |
 | 0.1.0   | 2025-11-04 | Initial public drop: shared vLLM engine cache, mode/prompt presets, GPU memory control, refreshed Gradio UI, session auto-cleanup |
 

@@ -57,6 +57,7 @@ PRINT_NUM_VIS_TOKENS = _parse_bool_env("DEEPREADER_PRINT_NUM_VIS_TOKENS", False)
 SKIP_REPEAT = _parse_bool_env("DEEPREADER_SKIP_REPEAT", True)
 MODEL_PATH = os.getenv("DEEPREADER_MODEL_PATH", "deepseek-ai/DeepSeek-OCR")  # change to your model path
 GPU_MEMORY_UTILIZATION = float(os.getenv("DEEPREADER_GPU_MEM_UTIL", "0.8"))
+KEEP_MODELS_LOADED = _parse_bool_env("DEEPREADER_KEEP_MODELS_LOADED", True)
 ACTIVE_MODE = DEFAULT_MODE
 
 # TODO: change INPUT_PATH

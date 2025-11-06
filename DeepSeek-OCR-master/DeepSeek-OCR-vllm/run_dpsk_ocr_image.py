@@ -117,7 +117,7 @@ def parse_args():
     parser.add_argument("--save-results", type=str2bool, default=True, help="Persist markdown and visualizations to disk")
     parser.add_argument(
         "--cuda-visible-devices",
-        default=os.getenv("DEEPREADER_CUDA_VISIBLE_DEVICES", os.environ.get("CUDA_VISIBLE_DEVICES", "4")),
+        default=os.getenv("DEEPREADER_CUDA_VISIBLE_DEVICES", os.environ.get("CUDA_VISIBLE_DEVICES", "0")),
         help="Comma-separated GPU device ids to expose to the runner",
     )
     parser.add_argument("--gpu-memory-util", type=float, default=None,

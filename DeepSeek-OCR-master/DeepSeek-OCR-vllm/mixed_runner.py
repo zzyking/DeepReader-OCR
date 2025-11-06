@@ -27,7 +27,7 @@ def run_mixed_image_pdf(
     max_concurrency: Optional[int] = None,
     cuda_visible_devices: Optional[str] = None,
     gpu_memory_utilization: Optional[float] = None,
-    keep_model_loaded: bool = True,
+    keep_model_loaded: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Execute mixed image and PDF OCR requests concurrently on a single GPU.
@@ -55,6 +55,10 @@ def run_mixed_image_pdf(
     default_skip_repeat = skip_repeat if skip_repeat is not None else config.SKIP_REPEAT
     default_num_workers = num_workers if num_workers is not None else config.NUM_WORKERS
     effective_concurrency = max_concurrency if max_concurrency is not None else config.MAX_CONCURRENCY
+    keep_model_loaded = keep_model_loaded if keep_model_loaded is not None else config.KEEP_MODELS_LOADED
+    if cuda_visible_devices is None:
+        cuda_visible_devices = os.getenv("DEEPREADER_CUDA_VISIBLE_DEVICES")
+    gpu_memory_utilization = gpu_memory_utilization if gpu_memory_utilization is not None else config.GPU_MEMORY_UTILIZATION
 
     image_requests = image_requests or []
     pdf_requests = pdf_requests or []

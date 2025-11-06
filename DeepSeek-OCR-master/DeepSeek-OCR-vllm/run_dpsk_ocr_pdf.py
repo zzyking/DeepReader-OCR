@@ -14,7 +14,6 @@ from tqdm import tqdm
 if torch.version.cuda == '11.8':
     os.environ["TRITON_PTXAS_PATH"] = "/usr/local/cuda-11.8/bin/ptxas"
 os.environ['VLLM_USE_V1'] = '0'
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", '4')
 os.environ["VLLM_LOG_LEVEL"] = "debug"
 
 import config
@@ -64,7 +63,7 @@ def parse_args():
     parser.add_argument("--num-workers", type=int, default=config.NUM_WORKERS, help="Thread pool workers for preprocessing")
     parser.add_argument(
         "--cuda-visible-devices",
-        default=os.getenv("DEEPREADER_CUDA_VISIBLE_DEVICES", os.environ.get("CUDA_VISIBLE_DEVICES", "4")),
+        default=os.getenv("DEEPREADER_CUDA_VISIBLE_DEVICES", os.environ.get("CUDA_VISIBLE_DEVICES", "0")),
         help="Comma-separated GPU device ids to expose to the runner",
     )
     parser.add_argument("--gpu-memory-util", type=float, default=None,

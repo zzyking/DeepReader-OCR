@@ -8,3 +8,4 @@ addict
 Pillow
 numpy
 gradio
+matplotlib
