@@ -69,6 +69,10 @@ def parse_args():
     parser.add_argument("--gpu-memory-util", type=float, default=None,
                         help="Fraction of GPU memory to reserve (default 0.8, requires ≈10GB free VRAM)")
     parser.add_argument("--keep-model-loaded", type=str2bool, default=False, help="Keep the PDF model in memory after the run")
+    parser.add_argument("--pdf-render-dpi", type=int, default=config.PDF_RENDER_DPI,
+                        help="DPI used to rasterize each PDF page for model input (affects VRAM usage)")
+    parser.add_argument("--pdf-annot-dpi", type=int, default=config.PDF_ANNOT_DPI,
+                        help="DPI used to rasterize PDF pages for bounding boxes and crops (<=0 reuses render DPI)")
     return parser.parse_args()
 
 
@@ -281,13 +285,21 @@ def prepare_pdf_jobs(
     crop_mode: bool,
     skip_repeat: bool,
     num_workers: int,
+    render_dpi: int,
+    annot_dpi: int | None,
 ) -> tuple[list[dict], dict]:
     os.makedirs(output_path, exist_ok=True)
     os.makedirs(os.path.join(output_path, 'images'), exist_ok=True)
 
     print(f'{Colors.RED}PDF loading .....{Colors.RESET}')
 
-    images = pdf_to_images_high_quality(input_path)
+    images = pdf_to_images_high_quality(input_path, dpi=max(render_dpi, 144))
+    if annot_dpi is None or annot_dpi <= 0 or annot_dpi == render_dpi:
+        annot_images = images
+    else:
+        annot_images = pdf_to_images_high_quality(input_path, dpi=max(annot_dpi, 144))
+    if len(annot_images) != len(images):
+        raise RuntimeError("Annotation images and render images differ in length; ensure PDF pages render consistently.")
     sampling_params = make_pdf_sampling_params()
 
     process_fn = partial(process_single_image, prompt_text=prompt_text, crop_mode=crop_mode)
@@ -313,6 +325,7 @@ def prepare_pdf_jobs(
         "output_path": output_path,
         "skip_repeat": skip_repeat,
         "images": images,
+        "annot_images": annot_images,
         "base_name": base_name,
         "page_outputs": [None] * len(batch_inputs),
     }
@@ -337,7 +350,7 @@ def finalize_pdf_outputs(context: dict) -> str:
     skip_repeat = context["skip_repeat"]
     images = context["images"]
     page_outputs = context["page_outputs"]
-
+    images = context["annot_images"]
     mmd_det_path = os.path.join(output_path, f'{base_name}_det.mmd')
     mmd_path = os.path.join(output_path, f'{base_name}.mmd')
     pdf_out_path = os.path.join(output_path, f'{base_name}_layouts.pdf')
@@ -397,6 +410,8 @@ def run_pdf_pipeline(
     cuda_visible_devices: str | None = None,
     gpu_memory_utilization: float | None = None,
     keep_model_loaded: bool = True,
+    pdf_render_dpi: int | None = None,
+    pdf_annot_dpi: int | None = None,
 ) -> str:
     model_path = model_path or config.MODEL_PATH
     if crop_mode is None:
@@ -407,6 +422,10 @@ def run_pdf_pipeline(
         max_concurrency = config.MAX_CONCURRENCY
     if num_workers is None:
         num_workers = config.NUM_WORKERS
+    if pdf_render_dpi is None:
+        pdf_render_dpi = config.PDF_RENDER_DPI
+    if pdf_annot_dpi is None:
+        pdf_annot_dpi = config.PDF_ANNOT_DPI
 
     jobs, context = prepare_pdf_jobs(
         input_path=input_path,
@@ -415,6 +434,8 @@ def run_pdf_pipeline(
         crop_mode=crop_mode,
         skip_repeat=skip_repeat,
         num_workers=num_workers,
+        render_dpi=pdf_render_dpi,
+        annot_dpi=pdf_annot_dpi,
     )
 
     engine, _ = get_engine(model_path, cuda_visible_devices, gpu_memory_utilization)
@@ -455,6 +476,8 @@ def main():
     cuda_visible_devices = args.cuda_visible_devices
     gpu_memory_util = args.gpu_memory_util if args.gpu_memory_util is not None else config.GPU_MEMORY_UTILIZATION
     keep_model_loaded = args.keep_model_loaded
+    pdf_render_dpi = args.pdf_render_dpi if args.pdf_render_dpi is not None else config.PDF_RENDER_DPI
+    pdf_annot_dpi = args.pdf_annot_dpi if args.pdf_annot_dpi is not None else config.PDF_ANNOT_DPI
 
     run_pdf_pipeline(
         input_path=input_path,
@@ -468,6 +491,8 @@ def main():
         cuda_visible_devices=cuda_visible_devices,
         gpu_memory_utilization=gpu_memory_util,
         keep_model_loaded=keep_model_loaded,
+        pdf_render_dpi=pdf_render_dpi,
+        pdf_annot_dpi=pdf_annot_dpi,
     )
 
 

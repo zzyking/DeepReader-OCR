@@ -58,6 +58,8 @@ SKIP_REPEAT = _parse_bool_env("DEEPREADER_SKIP_REPEAT", True)
 MODEL_PATH = os.getenv("DEEPREADER_MODEL_PATH", "deepseek-ai/DeepSeek-OCR")  # change to your model path
 GPU_MEMORY_UTILIZATION = float(os.getenv("DEEPREADER_GPU_MEM_UTIL", "0.8"))
 KEEP_MODELS_LOADED = _parse_bool_env("DEEPREADER_KEEP_MODELS_LOADED", True)
+PDF_RENDER_DPI = _parse_int_env("DEEPREADER_PDF_RENDER_DPI", 144)
+PDF_ANNOT_DPI = _parse_int_env("DEEPREADER_PDF_ANNOT_DPI", max(PDF_RENDER_DPI, 432))
 ACTIVE_MODE = DEFAULT_MODE
 
 # TODO: change INPUT_PATH

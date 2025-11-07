@@ -65,6 +65,32 @@ def _env_bool(var_name: str, default: bool) -> bool:
     return default
 
 
+def _env_int(var_name: str, default: Optional[int]) -> Optional[int]:
+    value = os.getenv(var_name)
+    if value is None:
+        return default
+    value = value.strip()
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_float(var_name: str, default: float) -> float:
+    value = os.getenv(var_name)
+    if value is None:
+        return default
+    value = value.strip()
+    if not value:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 def _prepare_session(input_file_path: str) -> Tuple[Path, Path, Path]:
     input_suffix = Path(input_file_path).suffix.lower()
     session_id = uuid.uuid4().hex
@@ -283,7 +309,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=int(os.getenv("DEEPREADER_GRADIO_PORT", "7860")), help="Port for the Gradio server")
     parser.add_argument("--share", action="store_true", help="Enable Gradio share link")
     parser.add_argument("--no-browser", action="store_true", help="Do not open the browser automatically")
-    parser.add_argument("--queue", action="store_true", help="Enable Gradio queue")
+    parser.add_argument("--queue", dest="queue_enabled", action="store_true", help="Enable the Gradio request queue")
+    parser.add_argument("--no-queue", dest="queue_enabled", action="store_false", help="Disable the Gradio request queue")
+    parser.add_argument(
+        "--queue-concurrency",
+        type=int,
+        default=_env_int("DEEPREADER_QUEUE_CONCURRENCY", 4),
+        help="Maximum number of queued jobs that may run concurrently (set ≤0 for no limit)",
+    )
+    parser.add_argument(
+        "--queue-max-size",
+        type=int,
+        default=_env_int("DEEPREADER_QUEUE_MAX_SIZE", 32),
+        help="Maximum number of pending jobs in the queue (set ≤0 for no limit)",
+    )
+    parser.set_defaults(queue_enabled=_env_bool("DEEPREADER_QUEUE_ENABLED", True))
     parser.add_argument(
         "--allow-path",
         action="append",
@@ -298,6 +338,14 @@ def main():
 
     interface = build_interface()
 
+    if args.queue_enabled:
+        queue_kwargs = {}
+        if args.queue_concurrency and args.queue_concurrency > 0:
+            queue_kwargs["default_concurrency_limit"] = args.queue_concurrency
+        if args.queue_max_size and args.queue_max_size > 0:
+            queue_kwargs["max_size"] = args.queue_max_size
+        interface = interface.queue(**queue_kwargs)
+
     launch_kwargs = {
         "server_name": args.host,
         "server_port": args.port,
@@ -305,9 +353,6 @@ def main():
         "inbrowser": not args.no_browser,
         "show_error": True,
     }
-
-    if args.queue:
-        interface = interface.queue()
 
     allowed_paths = {str(APP_ROOT), str(SESSION_ROOT), str(VLLM_DIR)}
     if args.allowed_paths:

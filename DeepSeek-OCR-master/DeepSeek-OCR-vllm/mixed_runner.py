@@ -54,6 +54,8 @@ def run_mixed_image_pdf(
     default_pdf_crop = pdf_crop_mode if pdf_crop_mode is not None else config.CROP_MODE
     default_skip_repeat = skip_repeat if skip_repeat is not None else config.SKIP_REPEAT
     default_num_workers = num_workers if num_workers is not None else config.NUM_WORKERS
+    default_pdf_render_dpi = config.PDF_RENDER_DPI
+    default_pdf_annot_dpi = config.PDF_ANNOT_DPI
     effective_concurrency = max_concurrency if max_concurrency is not None else config.MAX_CONCURRENCY
     keep_model_loaded = keep_model_loaded if keep_model_loaded is not None else config.KEEP_MODELS_LOADED
     if cuda_visible_devices is None:
@@ -92,6 +94,8 @@ def run_mixed_image_pdf(
             pdf_crop = spec_data.get("crop_mode", default_pdf_crop)
             pdf_skip = spec_data.get("skip_repeat", default_skip_repeat)
             pdf_workers = spec_data.get("num_workers", default_num_workers)
+            pdf_render_dpi = spec_data.get("pdf_render_dpi", spec_data.get("render_dpi", default_pdf_render_dpi))
+            pdf_annot_dpi = spec_data.get("pdf_annot_dpi", spec_data.get("annot_dpi", default_pdf_annot_dpi))
 
             pdf_jobs, context = prepare_pdf_jobs(
                 input_path=pdf_input,
@@ -100,6 +104,8 @@ def run_mixed_image_pdf(
                 crop_mode=pdf_crop,
                 skip_repeat=pdf_skip,
                 num_workers=pdf_workers,
+                render_dpi=pdf_render_dpi,
+                annot_dpi=pdf_annot_dpi,
             )
             pdf_contexts.append(context)
             jobs.extend(pdf_jobs)

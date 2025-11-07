@@ -61,10 +61,11 @@ Features:
 - Backend device selection, concurrency, and GPU memory utilisation follow the `DEEPREADER_*` environment variables.
 - Use “Unload Models” to free the shared vLLM engine and release GPU memory between runs.
 - Mixed workloads (single images + PDFs) share one GPU via the unified concurrency helper used by the Gradio backend, so simultaneous users no longer block each other.
+- A Gradio queue is enabled by default to cap concurrency and reject excessive load; tune it with `--queue-concurrency`, `--queue-max-size`, or disable via `--no-queue` if you need raw FastAPI behavior.
 - Gradio keeps only the latest 20 sessions and drops anything older than 24 hours, so `outputs/gradio_sessions/` stays tidy.
 - Each run produces a ZIP bundle (`result.mmd`, figures, annotated layouts, logs) ready for download.
 
-Use the prompt-template dropdown to populate the textbox with a preset and tweak the prompt before running. Advanced runtime knobs—CUDA device list, concurrency, worker counts, GPU memory fraction, repeat filtering, and cache retention—are controlled via environment variables or CLI flags (see the sections below). Each run creates a session under `outputs/gradio_sessions/`, and the downloaded archive also includes a `gradio_run.log` with console output. Use `--port` to pick a different port, `--share` for public links, `--queue` to enable Gradio’s request queue, and `--allow-path <dir>` to expose extra directories for downloads if needed.
+Use the prompt-template dropdown to populate the textbox with a preset and tweak the prompt before running. Advanced runtime knobs—CUDA device list, concurrency, worker counts, GPU memory fraction, repeat filtering, and cache retention—are controlled via environment variables or CLI flags (see the sections below). Each run creates a session under `outputs/gradio_sessions/`, and the downloaded archive also includes a `gradio_run.log` with console output. Use `--port` to pick a different port, `--share` for public links, `--no-queue` if you prefer immediate FastAPI calls, adjust the guardrails with `--queue-concurrency` / `--queue-max-size`, and `--allow-path <dir>` to expose extra directories for downloads if needed.
 
 >**Note**: plan for ≈10 GB of free VRAM for the default gundam (hi-res) mode. Lower `DEEPREADER_GPU_MEM_UTIL` or the corresponding CLI flag if your GPU has less headroom.
 
@@ -127,7 +128,9 @@ python run_dpsk_ocr_pdf.py \
   --max-concurrency 4 \
   --gpu-memory-util 0.8 \
   --cuda-visible-devices 0 \
-  --keep-model-loaded true
+  --keep-model-loaded true \
+  --pdf-render-dpi 144 \
+  --pdf-annot-dpi 320
 ```
 
 You'll get:
@@ -136,6 +139,7 @@ You'll get:
 - `<paper>.mmd`: Cleaned Markdown with inline image references.
 - `<paper>_layouts.pdf`: Stitch of annotated page previews.
 - `images/`: page-level crops.
+- `--pdf-annot-dpi` (or `DEEPREADER_PDF_ANNOT_DPI`) renders a second, higher-resolution pass dedicated to bounding boxes and figure crops, so exported images stay sharp even if the model runs on downsampled pages. Adjust `--pdf-render-dpi` (`DEEPREADER_PDF_RENDER_DPI`) to trade off VRAM usage vs. per-page fidelity during inference.
 
 Disable repeat filtering with `--skip-repeat false` if you need every page’s raw output.
 
@@ -170,16 +174,16 @@ The helper merges both pipelines, shares a single `AsyncLLMEngine`, and respects
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
-| 0.2.1   | 2025-11-10 | Simplified Gradio UI with backend-driven runtime settings, shared unload helper, expanded mixed-runner overrides |
-| 0.2.0   | 2025-11-06 | Mixed image/PDF concurrency via shared `AsyncLLMEngine`, reusable batching helpers, Gradio backend upgraded to the unified runner |
-| 0.1.0   | 2025-11-04 | Initial public drop: shared vLLM engine cache, mode/prompt presets, GPU memory control, refreshed Gradio UI, session auto-cleanup |
+| 0.2.2   | 2025-11-07 | Added queue toggles plus PDF render/annotation DPI controls for sharper crops without extra VRAM. |
+| 0.2.1   | 2025-11-06 | Streamlined Gradio UI with backend-driven defaults and a shared unload helper. |
+| 0.2.0   | 2025-11-06 | Introduced mixed image/PDF concurrency on a single `AsyncLLMEngine`. |
+| 0.1.0   | 2025-11-04 | Initial release with shared vLLM cache, prompt presets, and session cleanup. |
 
 
 ## Troubleshooting
 
 - **GPU capability errors**: ensure `CUDA_DEVICE_ORDER=PCI_BUS_ID` (automatically set) and specify a single `--cuda-visible-devices` index.
 - **Low VRAM**: reduce `--gpu-memory-util` (e.g., 0.6) or use `base` mode.
-- **Missing `/tmp` write access**: `export TMPDIR=$PWD/outputs/tmp`.
 - **NVML InvalidArgument**: usually indicates pointing to a non-existent GPU index; double-check the selected CUDA device.
 
 
