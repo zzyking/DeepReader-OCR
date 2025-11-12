@@ -4,10 +4,7 @@ import os
 import re
 from concurrent.futures import ThreadPoolExecutor
 from functools import partial
-from typing import List
-
 import fitz
-import img2pdf
 import torch
 from tqdm import tqdm
 
@@ -132,29 +129,73 @@ def pdf_to_images_high_quality(pdf_path, dpi=144, image_format="PNG"):
     pdf_document.close()
     return images
 
-def pil_to_pdf_img2pdf(pil_images, output_path):
+def _color_from_indices(page_index: int, box_index: int) -> tuple[float, float, float]:
+    seed = (page_index + 1) * 7919 + (box_index + 1) * 104729
+    rng = np.random.default_rng(seed)
+    base = rng.random(3) * 0.6 + 0.2
+    return tuple(float(val) for val in base)
 
-    if not pil_images:
+
+def annotate_pdf_with_boxes(
+    pdf_path: str,
+    output_path: str,
+    page_annotations: list[list[tuple[str, tuple[float, float, float, float]]]],
+    *,
+    font_name: str = "helv",
+    font_size: float = 5.0,
+    label_padding: float = 2.0,
+):
+    if not page_annotations:
         return
-    
-    image_bytes_list = []
-    
-    for img in pil_images:
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        
-        img_buffer = io.BytesIO()
-        img.save(img_buffer, format='JPEG', quality=95)
-        img_bytes = img_buffer.getvalue()
-        image_bytes_list.append(img_bytes)
-    
-    try:
-        pdf_bytes = img2pdf.convert(image_bytes_list)
-        with open(output_path, "wb") as f:
-            f.write(pdf_bytes)
 
-    except Exception as e:
-        print(f"error: {e}")
+    pdf_document = fitz.open(pdf_path)
+
+    for page_index in range(pdf_document.page_count):
+        page = pdf_document.load_page(page_index)
+        annotations = page_annotations[page_index] if page_index < len(page_annotations) else []
+        if not annotations:
+            continue
+
+        page_width = page.rect.width
+        page_height = page.rect.height
+
+        for box_index, (label_type, norm_rect) in enumerate(annotations):
+            x1_norm, y1_norm, x2_norm, y2_norm = norm_rect
+            rect = fitz.Rect(
+                (x1_norm / 999.0) * page_width,
+                (y1_norm / 999.0) * page_height,
+                (x2_norm / 999.0) * page_width,
+                (y2_norm / 999.0) * page_height,
+            )
+
+            color = _color_from_indices(page_index, box_index)
+            page.draw_rect(rect, color=color, width=1.2, fill=color, fill_opacity=0.1, overlay=True)
+
+            if not label_type:
+                continue
+
+            try:
+                text_width = page.get_text_length(label_type, fontname=font_name, fontsize=font_size)
+            except Exception:
+                text_width = len(label_type) * font_size * 0.6
+
+            text_height = font_size
+            label_top = max(page.rect.y0, rect.y0 - text_height - label_padding)
+            text_position = (
+                rect.x0 + label_padding,
+                label_top + text_height,
+            )
+            page.insert_text(
+                text_position,
+                label_type,
+                fontsize=font_size,
+                color=color,
+                fontname=font_name,
+                overlay=True,
+            )
+
+    pdf_document.save(output_path, garbage=4, deflate=True)
+    pdf_document.close()
 
 
 
@@ -199,6 +240,7 @@ def draw_bounding_boxes(image, refs, jdx, output_dir):
     font = ImageFont.load_default()
 
     img_idx = 0
+    vector_boxes: list[tuple[str, tuple[float, float, float, float]]] = []
     
     for i, ref in enumerate(refs):
         try:
@@ -210,13 +252,14 @@ def draw_bounding_boxes(image, refs, jdx, output_dir):
 
                 color_a = color + (20, )
                 for points in points_list:
-                    x1, y1, x2, y2 = points
+                    x1_norm, y1_norm, x2_norm, y2_norm = points
+                    vector_boxes.append((label_type, (x1_norm, y1_norm, x2_norm, y2_norm)))
 
-                    x1 = int(x1 / 999 * image_width)
-                    y1 = int(y1 / 999 * image_height)
+                    x1 = int(x1_norm / 999 * image_width)
+                    y1 = int(y1_norm / 999 * image_height)
 
-                    x2 = int(x2 / 999 * image_width)
-                    y2 = int(y2 / 999 * image_height)
+                    x2 = int(x2_norm / 999 * image_width)
+                    y2 = int(y2_norm / 999 * image_height)
 
                     if label_type == 'image':
                         try:
@@ -250,12 +293,12 @@ def draw_bounding_boxes(image, refs, jdx, output_dir):
         except:
             continue
     img_draw.paste(overlay, (0, 0), overlay)
-    return img_draw
+    return img_draw, vector_boxes
 
 
 def process_image_with_refs(image, ref_texts, jdx, output_dir):
-    result_image = draw_bounding_boxes(image, ref_texts, jdx, output_dir)
-    return result_image
+    result_image, vector_boxes = draw_bounding_boxes(image, ref_texts, jdx, output_dir)
+    return result_image, vector_boxes
 
 
 def process_single_image(image, prompt_text, crop_mode):
@@ -293,11 +336,11 @@ def prepare_pdf_jobs(
 
     print(f'{Colors.RED}PDF loading .....{Colors.RESET}')
 
-    images = pdf_to_images_high_quality(input_path, dpi=max(render_dpi, 144))
+    images = pdf_to_images_high_quality(input_path, dpi=max(render_dpi, 72))
     if annot_dpi is None or annot_dpi <= 0 or annot_dpi == render_dpi:
         annot_images = images
     else:
-        annot_images = pdf_to_images_high_quality(input_path, dpi=max(annot_dpi, 144))
+        annot_images = pdf_to_images_high_quality(input_path, dpi=max(annot_dpi, 72))
     if len(annot_images) != len(images):
         raise RuntimeError("Annotation images and render images differ in length; ensure PDF pages render consistently.")
     sampling_params = make_pdf_sampling_params()
@@ -324,7 +367,6 @@ def prepare_pdf_jobs(
         "input_path": input_path,
         "output_path": output_path,
         "skip_repeat": skip_repeat,
-        "images": images,
         "annot_images": annot_images,
         "base_name": base_name,
         "page_outputs": [None] * len(batch_inputs),
@@ -348,7 +390,6 @@ def finalize_pdf_outputs(context: dict) -> str:
     output_path = context["output_path"]
     base_name = context["base_name"]
     skip_repeat = context["skip_repeat"]
-    images = context["images"]
     page_outputs = context["page_outputs"]
     images = context["annot_images"]
     mmd_det_path = os.path.join(output_path, f'{base_name}_det.mmd')
@@ -357,7 +398,7 @@ def finalize_pdf_outputs(context: dict) -> str:
 
     contents_det = ''
     contents = ''
-    draw_images = []
+    page_annotations: list[list[tuple[str, tuple[float, float, float, float]]]] = [list() for _ in images]
 
     for jdx, (content, img) in enumerate(zip(page_outputs, images)):
         if content is None:
@@ -376,9 +417,8 @@ def finalize_pdf_outputs(context: dict) -> str:
         image_draw = img.copy()
 
         matches_ref, matches_images, mathes_other = re_match(content)
-        result_image = process_image_with_refs(image_draw, matches_ref, jdx, output_path)
-
-        draw_images.append(result_image)
+        _, vector_boxes = process_image_with_refs(image_draw, matches_ref, jdx, output_path)
+        page_annotations[jdx] = vector_boxes
 
         for idx, a_match_image in enumerate(matches_images):
             content = content.replace(a_match_image, f'![](images/{jdx}_{idx}.jpg)\n')
@@ -394,7 +434,7 @@ def finalize_pdf_outputs(context: dict) -> str:
     with open(mmd_path, 'w', encoding='utf-8') as afile:
         afile.write(contents)
 
-    pil_to_pdf_img2pdf(draw_images, pdf_out_path)
+    annotate_pdf_with_boxes(context["input_path"], pdf_out_path, page_annotations)
     return mmd_path
 
 

@@ -137,9 +137,10 @@ You'll get:
 
 - `<paper>_det.mmd`: Raw model output with detection tags.
 - `<paper>.mmd`: Cleaned Markdown with inline image references.
-- `<paper>_layouts.pdf`: Stitch of annotated page previews.
+- `<paper>_layouts.pdf`: Original PDF with lightweight vector overlays for bounding boxes (no re-rasterized pages).
 - `images/`: page-level crops.
 - `--pdf-annot-dpi` (or `DEEPREADER_PDF_ANNOT_DPI`) renders a second, higher-resolution pass dedicated to bounding boxes and figure crops, so exported images stay sharp even if the model runs on downsampled pages. Adjust `--pdf-render-dpi` (`DEEPREADER_PDF_RENDER_DPI`) to trade off VRAM usage vs. per-page fidelity during inference.
+- Layout overlays edit the source PDF in place, so the boxed variant stays compact even when using high annotation DPI values.
 
 Disable repeat filtering with `--skip-repeat false` if you need every page’s raw output.
 
@@ -174,6 +175,7 @@ The helper merges both pipelines, shares a single `AsyncLLMEngine`, and respects
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
+| 0.2.3   | 2025-11-12 | PDF annotations now draw translucent vector overlays directly on the source file, keeping `*_layouts.pdf` tiny while preserving labels. |
 | 0.2.2   | 2025-11-07 | Added queue toggles plus PDF render/annotation DPI controls for sharper crops without extra VRAM. |
 | 0.2.1   | 2025-11-06 | Streamlined Gradio UI with backend-driven defaults and a shared unload helper. |
 | 0.2.0   | 2025-11-06 | Introduced mixed image/PDF concurrency on a single `AsyncLLMEngine`. |
