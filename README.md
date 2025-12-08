@@ -1,5 +1,7 @@
 # DeepReader
 
+[![DeepReader Logo](assets/deepreader_logo.png)](assets/deepreader_logo.png)
+
 DeepReader is an agentic reading toolkit that couples DeepSeek-OCR with opinionated defaults for running single-document or batch OCR. It streamlines image/PDF ingestion, produces Markdown accompanied by figure crops and layout previews, and exposes knobs for both CLI and Gradio workflows.
 
 
