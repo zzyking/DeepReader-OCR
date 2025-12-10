@@ -3,11 +3,11 @@ from copy import deepcopy
 from typing import Any, Dict, List, Optional
 
 import config
-from concurrency import run_concurrent_generation
+from concurrency import run_streaming_generation
 from engine_cache import get_engine, unload_all_engines
 from run_dpsk_ocr_image import make_sampling_params as make_image_sampling_params
-from run_dpsk_ocr_image import prepare_image_jobs
-from run_dpsk_ocr_pdf import finalize_pdf_outputs, prepare_pdf_jobs
+from run_dpsk_ocr_image import stream_image_jobs
+from run_dpsk_ocr_pdf import finalize_pdf_outputs, stream_pdf_jobs
 
 
 def _clone_request(spec: dict) -> dict:
@@ -65,64 +65,62 @@ def run_mixed_image_pdf(
     image_requests = image_requests or []
     pdf_requests = pdf_requests or []
 
-    jobs: List[dict] = []
     image_jobs: List[dict] = []
     pdf_contexts: List[dict] = []
+    sampling_params = make_image_sampling_params()
 
-    if image_requests:
-        sampling_params = make_image_sampling_params()
-        prepared_specs = []
-        for spec in image_requests:
-            spec_data = _clone_request(spec)
-            crop_choice = spec_data.pop("crop_mode", default_image_crop)
-            prepared_specs.append(
-                prepare_image_jobs(
-                    [spec_data],
-                    crop_mode=crop_choice,
-                    sampling_params=sampling_params,
-                )[0]
-            )
-        image_jobs.extend(prepared_specs)
-        jobs.extend(prepared_specs)
-
-    if pdf_requests:
-        for spec in pdf_requests:
-            spec_data = _clone_request(spec)
-            pdf_input = spec_data["input"]
-            pdf_output = spec_data.get("output", config.OUTPUT_PATH)
-            pdf_prompt = spec_data.get("prompt", config.PROMPT)
-            pdf_crop = spec_data.get("crop_mode", default_pdf_crop)
-            pdf_skip = spec_data.get("skip_repeat", default_skip_repeat)
-            pdf_workers = spec_data.get("num_workers", default_num_workers)
-            pdf_render_dpi = spec_data.get("pdf_render_dpi", spec_data.get("render_dpi", default_pdf_render_dpi))
-            pdf_annot_dpi = spec_data.get("pdf_annot_dpi", spec_data.get("annot_dpi", default_pdf_annot_dpi))
-
-            pdf_jobs, context = prepare_pdf_jobs(
-                input_path=pdf_input,
-                output_path=pdf_output,
-                prompt_text=pdf_prompt,
-                crop_mode=pdf_crop,
-                skip_repeat=pdf_skip,
-                num_workers=pdf_workers,
-                render_dpi=pdf_render_dpi,
-                annot_dpi=pdf_annot_dpi,
-            )
-            pdf_contexts.append(context)
-            jobs.extend(pdf_jobs)
-
-    if not jobs:
+    if not image_requests and not pdf_requests:
         return {"image_results": [], "pdf_results": []}
 
     engine, _ = get_engine(model_path, cuda_visible_devices, gpu_memory_utilization)
-    request_queue = [(job["payload"], job["sampling_params"]) for job in jobs]
-    outputs = run_concurrent_generation(
+
+    def _request_iter():
+        if image_requests:
+            for spec in image_requests:
+                spec_data = _clone_request(spec)
+                crop_choice = spec_data.pop("crop_mode", default_image_crop)
+                for job in stream_image_jobs(
+                    [spec_data],
+                    crop_mode=crop_choice,
+                    sampling_params=sampling_params,
+                ):
+                    image_jobs.append(job)
+                    yield (job["payload"], job["sampling_params"], job["handle_result"])
+
+        if pdf_requests:
+            for spec in pdf_requests:
+                spec_data = _clone_request(spec)
+                pdf_input = spec_data["input"]
+                pdf_output = spec_data.get("output", config.OUTPUT_PATH)
+                pdf_prompt = spec_data.get("prompt", config.PROMPT)
+                pdf_crop = spec_data.get("crop_mode", default_pdf_crop)
+                pdf_skip = spec_data.get("skip_repeat", default_skip_repeat)
+                pdf_workers = spec_data.get("num_workers", default_num_workers)
+                pdf_render_dpi = spec_data.get("pdf_render_dpi", spec_data.get("render_dpi", default_pdf_render_dpi))
+                pdf_annot_dpi = spec_data.get("pdf_annot_dpi", spec_data.get("annot_dpi", default_pdf_annot_dpi))
+
+                # pdf_workers is unused in streaming path (render is sequential), kept for API compatibility.
+                _ = pdf_workers
+
+                job_iter_fn, context, _pdf_sampling = stream_pdf_jobs(
+                    input_path=pdf_input,
+                    output_path=pdf_output,
+                    prompt_text=pdf_prompt,
+                    crop_mode=pdf_crop,
+                    skip_repeat=pdf_skip,
+                    num_workers=pdf_workers,
+                    render_dpi=pdf_render_dpi,
+                    annot_dpi=pdf_annot_dpi,
+                )
+                pdf_contexts.append(context)
+                for job in job_iter_fn():
+                    yield (job["payload"], job["sampling_params"], job["handle_result"])
+
+    run_streaming_generation(
         engine=engine,
-        requests=request_queue,
+        request_iterable=_request_iter(),
         max_concurrency=effective_concurrency,
     )
-
-    for job, text in zip(jobs, outputs, strict=False):
-        job["handle_result"](text)
 
     image_results = [job["result"] for job in image_jobs]
 

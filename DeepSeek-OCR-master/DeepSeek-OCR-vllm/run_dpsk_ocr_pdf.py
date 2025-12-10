@@ -2,8 +2,9 @@ import argparse
 import io
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
+from pathlib import Path
 import fitz
 import torch
 from tqdm import tqdm
@@ -25,9 +26,12 @@ from vllm import SamplingParams
 from process.ngram_norepeat import NoRepeatNGramLogitsProcessor
 from process.image_process import DeepseekOCRProcessor
 from engine_cache import get_engine, unload_all_engines
-from concurrency import run_concurrent_generation
+from concurrency import run_concurrent_generation, run_streaming_generation
 
-ModelRegistry.register_model("DeepseekOCRForCausalLM", DeepseekOCRForCausalLM)
+# Prevent duplicate registration when modules are imported in multiple processes.
+_registry_map = getattr(ModelRegistry, "_model_name_to_cls", None)
+if not (isinstance(_registry_map, dict) and "DeepseekOCRForCausalLM" in _registry_map):
+    ModelRegistry.register_model("DeepseekOCRForCausalLM", DeepseekOCRForCausalLM)
 
 
 def resolve_path(path: str) -> str:
@@ -128,6 +132,22 @@ def pdf_to_images_high_quality(pdf_path, dpi=144, image_format="PNG"):
     
     pdf_document.close()
     return images
+
+
+def _render_pdf_page(pdf_document: fitz.Document, page_index: int, dpi: int) -> Image.Image:
+    """Render a single PDF page to a PIL image."""
+    page = pdf_document[page_index]
+    zoom = max(dpi, 72) / 72.0
+    matrix = fitz.Matrix(zoom, zoom)
+    pixmap = page.get_pixmap(matrix=matrix, alpha=False)
+    Image.MAX_IMAGE_PIXELS = None
+    img_data = pixmap.tobytes("png")
+    img = Image.open(io.BytesIO(img_data))
+    if img.mode in ("RGBA", "LA"):
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+        img = background
+    return img
 
 def _color_from_indices(page_index: int, box_index: int) -> tuple[float, float, float]:
     seed = (page_index + 1) * 7919 + (box_index + 1) * 104729
@@ -400,33 +420,40 @@ def finalize_pdf_outputs(context: dict) -> str:
     contents = ''
     page_annotations: list[list[tuple[str, tuple[float, float, float, float]]]] = [list() for _ in images]
 
-    for jdx, (content, img) in enumerate(zip(page_outputs, images)):
-        if content is None:
-            continue
+    def _process_page(args: tuple[int, str, Image.Image]) -> tuple[int, str, str, list[tuple[str, tuple[float, float, float, float]]]]:
+        page_idx, raw_content, img = args
+        content = raw_content
 
         if '<｜end▁of▁sentence｜>' in content:
             content = content.replace('<｜end▁of▁sentence｜>', '')
         else:
             if skip_repeat:
-                continue
+                return page_idx, '', '', []
 
         page_num = '\n<--- Page Split --->'
-
-        contents_det += content + f'\n{page_num}\n'
-
         image_draw = img.copy()
 
         matches_ref, matches_images, mathes_other = re_match(content)
-        _, vector_boxes = process_image_with_refs(image_draw, matches_ref, jdx, output_path)
-        page_annotations[jdx] = vector_boxes
+        _, vector_boxes = process_image_with_refs(image_draw, matches_ref, page_idx, output_path)
 
         for idx, a_match_image in enumerate(matches_images):
-            content = content.replace(a_match_image, f'![](images/{jdx}_{idx}.jpg)\n')
+            content = content.replace(a_match_image, f'![](images/{page_idx}_{idx}.jpg)\n')
 
         for a_match_other in mathes_other:
             content = content.replace(a_match_other, '').replace('\\coloneqq', ':=').replace('\\eqqcolon', '=:').replace('\n\n\n\n', '\n\n').replace('\n\n\n', '\n\n')
 
-        contents += content + f'\n{page_num}\n'
+        return page_idx, raw_content + f'\n{page_num}\n', content + f'\n{page_num}\n', vector_boxes
+
+    work_items = [(idx, content, img) for idx, (content, img) in enumerate(zip(page_outputs, images)) if content is not None]
+    if work_items:
+        max_workers = max(1, min(len(work_items), os.cpu_count() or 4))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for page_idx, det_fragment, content_fragment, vectors in executor.map(_process_page, work_items):
+                if det_fragment:
+                    contents_det += det_fragment
+                if content_fragment:
+                    contents += content_fragment
+                page_annotations[page_idx] = vectors
 
     with open(mmd_det_path, 'w', encoding='utf-8') as afile:
         afile.write(contents_det)
@@ -436,6 +463,70 @@ def finalize_pdf_outputs(context: dict) -> str:
 
     annotate_pdf_with_boxes(context["input_path"], pdf_out_path, page_annotations)
     return mmd_path
+
+def stream_pdf_jobs(
+    input_path: str,
+    output_path: str,
+    prompt_text: str,
+    crop_mode: bool,
+    skip_repeat: bool,
+    num_workers: int,
+    render_dpi: int,
+    annot_dpi: int | None,
+) -> tuple[callable, dict, SamplingParams]:
+    """
+    Generator-friendly variant of ``prepare_pdf_jobs`` that yields jobs one by one
+    so vLLM can start generating while preprocessing continues.
+    """
+    os.makedirs(output_path, exist_ok=True)
+    os.makedirs(os.path.join(output_path, "images"), exist_ok=True)
+
+    pdf_bytes = Path(input_path).read_bytes()
+    with fitz.open(stream=pdf_bytes, filetype="pdf") as _doc_probe:
+        page_count = _doc_probe.page_count
+    base_name = os.path.splitext(os.path.basename(input_path))[0]
+
+    context = {
+        "input_path": input_path,
+        "output_path": output_path,
+        "skip_repeat": skip_repeat,
+        "annot_images": [None] * page_count,
+        "base_name": base_name,
+        "page_outputs": [None] * page_count,
+    }
+
+    sampling_params = make_pdf_sampling_params()
+
+    def _render_and_prepare(page_index: int) -> tuple[int, dict, Image.Image]:
+        with fitz.open(stream=pdf_bytes, filetype="pdf") as doc:
+            render_img = _render_pdf_page(doc, page_index, render_dpi)
+            if annot_dpi is None or annot_dpi <= 0 or annot_dpi == render_dpi:
+                annot_img = render_img
+            else:
+                annot_img = _render_pdf_page(doc, page_index, annot_dpi)
+
+        payload = process_single_image(render_img, prompt_text=prompt_text, crop_mode=crop_mode)
+        if "<image>" not in payload.get("prompt", ""):
+            payload.pop("multi_modal_data", None)
+
+        return page_index, payload, annot_img
+
+    def _job_iter():
+        max_workers = max(1, min(num_workers, page_count))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = [executor.submit(_render_and_prepare, idx) for idx in range(page_count)]
+            for fut in as_completed(futures):
+                page_index, payload, annot_img = fut.result()
+                context["annot_images"][page_index] = annot_img
+                yield {
+                    "type": "pdf",
+                    "page_index": page_index,
+                    "payload": payload,
+                    "sampling_params": sampling_params,
+                    "handle_result": _make_pdf_result_handler(context, page_index),
+                }
+
+    return _job_iter, context, sampling_params
 
 
 def run_pdf_pipeline(
@@ -467,7 +558,8 @@ def run_pdf_pipeline(
     if pdf_annot_dpi is None:
         pdf_annot_dpi = config.PDF_ANNOT_DPI
 
-    jobs, context = prepare_pdf_jobs(
+    engine, _ = get_engine(model_path, cuda_visible_devices, gpu_memory_utilization)
+    job_iter_fn, context, sampling_params = stream_pdf_jobs(
         input_path=input_path,
         output_path=output_path,
         prompt_text=prompt_text,
@@ -478,16 +570,15 @@ def run_pdf_pipeline(
         annot_dpi=pdf_annot_dpi,
     )
 
-    engine, _ = get_engine(model_path, cuda_visible_devices, gpu_memory_utilization)
-    request_queue = [(job["payload"], job["sampling_params"]) for job in jobs]
-    outputs_list = run_concurrent_generation(
+    def _request_iter():
+        for job in job_iter_fn():
+            yield (job["payload"], job["sampling_params"], job["handle_result"])
+
+    run_streaming_generation(
         engine=engine,
-        requests=request_queue,
+        request_iterable=_request_iter(),
         max_concurrency=max_concurrency,
     )
-
-    for job, text in zip(jobs, outputs_list, strict=False):
-        job["handle_result"](text)
 
     mmd_path = finalize_pdf_outputs(context)
 

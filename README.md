@@ -177,6 +177,7 @@ The helper merges both pipelines, shares a single `AsyncLLMEngine`, and respects
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
+| 0.2.4   | 2025-12-10 | PDF preprocessing/postprocessing now thread-parallel. |
 | 0.2.3   | 2025-11-12 | PDF annotations now draw translucent vector overlays directly on the source file, keeping `*_layouts.pdf` tiny while preserving labels. |
 | 0.2.2   | 2025-11-07 | Added queue toggles plus PDF render/annotation DPI controls for sharper crops without extra VRAM. |
 | 0.2.1   | 2025-11-06 | Streamlined Gradio UI with backend-driven defaults and a shared unload helper. |

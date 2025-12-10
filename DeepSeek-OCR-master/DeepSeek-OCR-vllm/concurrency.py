@@ -1,5 +1,5 @@
 import asyncio
-from typing import List, Sequence, Tuple
+from typing import Callable, Iterable, List, Sequence, Tuple
 from uuid import uuid4
 
 from vllm import AsyncLLMEngine, SamplingParams
@@ -61,5 +61,72 @@ def run_concurrent_generation(
             engine=engine,
             requests=requests,
             max_concurrency=effective_concurrency,
+        )
+    )
+
+
+async def generate_requests_streaming(
+    engine: AsyncLLMEngine,
+    request_iterable: Iterable[Tuple[dict, SamplingParams] | Tuple[dict, SamplingParams, Callable[[str], None]]],
+    max_concurrency: int,
+) -> List[str]:
+    """Execute vLLM requests as they are produced, allowing preprocessing to overlap."""
+    if max_concurrency <= 0:
+        raise ValueError("max_concurrency must be positive for streaming generation")
+
+    request_count = len(request_iterable) if hasattr(request_iterable, "__len__") else None
+    semaphore = asyncio.Semaphore(min(max_concurrency, request_count) if request_count else max_concurrency)
+    results: List[str] = []
+    tasks = []
+
+    batch_token = uuid4().hex
+    request_index = 0
+
+    async def _runner(
+        payload: dict,
+        sampling_params: SamplingParams,
+        handler: Callable[[str], None] | None,
+        request_id: str,
+    ):
+        async with semaphore:
+            text = await _collect_single_request(
+                engine=engine,
+                payload=payload,
+                sampling_params=sampling_params,
+                request_id=request_id,
+            )
+        if handler:
+            handler(text)
+        return text
+
+    for item in request_iterable:
+        if len(item) == 2:
+            payload, sampling_params = item  # type: ignore[misc]
+            handler = None
+        else:
+            payload, sampling_params, handler = item  # type: ignore[misc]
+        request_id = f"{batch_token}-{request_index}"
+        request_index += 1
+        tasks.append(asyncio.create_task(_runner(payload, sampling_params, handler, request_id)))
+        # Give control back to the loop so generation can start while we continue producing requests.
+        await asyncio.sleep(0)
+
+    if tasks:
+        results = await asyncio.gather(*tasks)
+
+    return results
+
+
+def run_streaming_generation(
+    engine: AsyncLLMEngine,
+    request_iterable: Iterable[Tuple[dict, SamplingParams] | Tuple[dict, SamplingParams, Callable[[str], None]]],
+    max_concurrency: int,
+) -> List[str]:
+    """Sync wrapper around ``generate_requests_streaming``."""
+    return asyncio.run(
+        generate_requests_streaming(
+            engine=engine,
+            request_iterable=request_iterable,
+            max_concurrency=max_concurrency,
         )
     )
