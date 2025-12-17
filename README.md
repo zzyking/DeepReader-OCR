@@ -64,7 +64,7 @@ Features:
 - Use “Unload Models” to free the shared vLLM engine and release GPU memory between runs.
 - Mixed workloads (single images + PDFs) share one GPU via the unified concurrency helper used by the Gradio backend, so simultaneous users no longer block each other.
 - A Gradio queue is enabled by default to cap concurrency and reject excessive load; tune it with `--queue-concurrency`, `--queue-max-size`, or disable via `--no-queue` if you need raw FastAPI behavior.
-- Gradio keeps only the latest 20 sessions and drops anything older than 24 hours, so `outputs/gradio_sessions/` stays tidy.
+- Gradio keeps only the latest 5 sessions and drops anything older than 30 minutes. Cleanup runs on server startup and before each run; upload temp files under `./tmp` are also pruned (30-minute TTL).
 - Each run produces a ZIP bundle (`result.mmd`, figures, annotated layouts, logs) ready for download.
 
 Use the prompt-template dropdown to populate the textbox with a preset and tweak the prompt before running. Advanced runtime knobs—CUDA device list, concurrency, worker counts, GPU memory fraction, repeat filtering, and cache retention—are controlled via environment variables or CLI flags (see the sections below). Each run creates a session under `outputs/gradio_sessions/`, and the downloaded archive also includes a `gradio_run.log` with console output. Use `--port` to pick a different port, `--share` for public links, `--no-queue` if you prefer immediate FastAPI calls, adjust the guardrails with `--queue-concurrency` / `--queue-max-size`, and `--allow-path <dir>` to expose extra directories for downloads if needed.
@@ -177,6 +177,7 @@ The helper merges both pipelines, shares a single `AsyncLLMEngine`, and respects
 
 | Version | Date       | Highlights |
 |---------|------------|------------|
+| 0.2.5   | 2025-12-17 | Added `cleanup_tmp` and `cleanup_sessions` helpers to prune old temp files and Gradio sessions. |
 | 0.2.4   | 2025-12-10 | PDF preprocessing/postprocessing now thread-parallel. |
 | 0.2.3   | 2025-11-12 | PDF annotations now draw translucent vector overlays directly on the source file, keeping `*_layouts.pdf` tiny while preserving labels. |
 | 0.2.2   | 2025-11-07 | Added queue toggles plus PDF render/annotation DPI controls for sharper crops without extra VRAM. |

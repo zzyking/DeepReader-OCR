@@ -16,7 +16,9 @@ VLLM_DIR = APP_ROOT / "DeepSeek-OCR-master" / "DeepSeek-OCR-vllm"
 
 sys.path.insert(0, str(VLLM_DIR))
 
-os.environ['GRADIO_TEMP_DIR'] = './tmp'
+os.environ["GRADIO_TEMP_DIR"] = "./tmp"  # 设置上传文件缓存位置
+TMP_ROOT = (APP_ROOT / os.environ["GRADIO_TEMP_DIR"]).resolve()
+TMP_ROOT.mkdir(parents=True, exist_ok=True)
 
 import gradio as gr  # noqa: E402
 import config  # noqa: E402
@@ -27,12 +29,58 @@ from mixed_runner import run_mixed_image_pdf  # noqa: E402
 SESSION_ROOT = (APP_ROOT / "outputs" / "gradio_sessions").resolve()
 SESSION_ROOT.mkdir(parents=True, exist_ok=True)
 
-
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
-def cleanup_sessions(max_sessions: int = 20, max_age_hours: int = 24) -> None:
+def cleanup_tmp(max_entries: int = 5, max_age_minutes: int = 1) -> None:
     entries = []
-    cutoff = time.time() - max_age_hours * 3600
+    cutoff = time.time() - max_age_minutes * 60
+
+    for item in TMP_ROOT.iterdir():
+        if item.name in {".gitkeep"}:
+            continue
+        try:
+            mtime = item.stat().st_mtime
+        except OSError:
+            continue
+        entries.append((mtime, item))
+
+    # Remove entries older than cutoff
+    for mtime, path in entries:
+        if mtime < cutoff:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+    # Cap total entry count (newest first) to avoid unbounded growth.
+    if max_entries and max_entries > 0:
+        remaining = []
+        for item in TMP_ROOT.iterdir():
+            if item.name in {".gitkeep"}:
+                continue
+            try:
+                mtime = item.stat().st_mtime
+            except OSError:
+                continue
+            remaining.append((mtime, item))
+
+        remaining.sort(reverse=True)
+        for _, path in remaining[max_entries:]:
+            try:
+                if path.is_dir():
+                    shutil.rmtree(path, ignore_errors=True)
+                else:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+
+def cleanup_sessions(max_sessions: int = 5, max_age_minutes: int = 1) -> None:
+    entries = []
+    cutoff = time.time() - max_age_minutes * 60
 
     for item in SESSION_ROOT.iterdir():
         if item.is_dir():
@@ -118,6 +166,7 @@ def run_deepreader(
     if suffix not in SUPPORTED_IMAGE_SUFFIXES and suffix != ".pdf":
         return None, f"Unsupported file type: {suffix}. Please upload an image or PDF."
 
+    cleanup_tmp()
     cleanup_sessions()
 
     session_dir, output_dir, staged_input = _prepare_session(str(input_path))
@@ -334,6 +383,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main():
+    # Prune stale sessions on startup so existing folders also respect retention.
+    cleanup_tmp()
+    cleanup_sessions()
     args = parse_args()
 
     interface = build_interface()
