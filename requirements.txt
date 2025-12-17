@@ -1,5 +1,7 @@
 transformers==4.46.3
 tokenizers==0.20.3
+peft==0.17.1
+trl==0.16.0
 PyMuPDF
 einops
 easydict

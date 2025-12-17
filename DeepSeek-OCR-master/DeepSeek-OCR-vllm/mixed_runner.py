@@ -59,7 +59,7 @@ def run_mixed_image_pdf(
     effective_concurrency = max_concurrency if max_concurrency is not None else config.MAX_CONCURRENCY
     keep_model_loaded = keep_model_loaded if keep_model_loaded is not None else config.KEEP_MODELS_LOADED
     if cuda_visible_devices is None:
-        cuda_visible_devices = os.getenv("DEEPREADER_CUDA_VISIBLE_DEVICES")
+        cuda_visible_devices = os.getenv("DEEPREADER_CUDA_VISIBLE_DEVICES", os.environ.get("CUDA_VISIBLE_DEVICES", "0"))
     gpu_memory_utilization = gpu_memory_utilization if gpu_memory_utilization is not None else config.GPU_MEMORY_UTILIZATION
 
     image_requests = image_requests or []

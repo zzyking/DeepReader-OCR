@@ -16,7 +16,7 @@ def _normalize_cuda(cuda_visible_devices: Optional[str]) -> str:
     if cuda_visible_devices and cuda_visible_devices.strip():
         first_device = cuda_visible_devices.split(",")[0].strip()
         return first_device
-    existing = os.environ.get("CUDA_VISIBLE_DEVICES")
+    existing = os.getenv("DEEPREADER_CUDA_VISIBLE_DEVICES", os.environ.get("CUDA_VISIBLE_DEVICES", "0"))
     if existing:
         return existing.split(",")[0].strip()
     return "0"
