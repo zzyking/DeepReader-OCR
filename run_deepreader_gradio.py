@@ -31,7 +31,7 @@ SESSION_ROOT.mkdir(parents=True, exist_ok=True)
 
 SUPPORTED_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"}
 
-def cleanup_tmp(max_entries: int = 5, max_age_minutes: int = 1) -> None:
+def cleanup_tmp(max_entries: int = 20, max_age_minutes: int = 30) -> None:
     entries = []
     cutoff = time.time() - max_age_minutes * 60
 
@@ -78,7 +78,7 @@ def cleanup_tmp(max_entries: int = 5, max_age_minutes: int = 1) -> None:
                 continue
 
 
-def cleanup_sessions(max_sessions: int = 5, max_age_minutes: int = 1) -> None:
+def cleanup_sessions(max_sessions: int = 10, max_age_minutes: int = 30) -> None:
     entries = []
     cutoff = time.time() - max_age_minutes * 60
 
